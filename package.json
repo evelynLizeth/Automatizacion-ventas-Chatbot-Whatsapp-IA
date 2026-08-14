@@ -1,0 +1,16 @@
+{
+  "name": "pc-venta-wa-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp que responde preguntas sobre laptops consultando un Excel alojado en OneDrive",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test-usability.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2"
+  }
+}
