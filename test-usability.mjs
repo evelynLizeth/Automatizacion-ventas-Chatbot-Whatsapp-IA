@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
-import { getUtilesProducts, getUtilesSheet, findItems, parseItemList, buildPriceImage, formatPrice, parseFile } from './lib/utiles.js';
+import { getUtilesProducts, getUtilesSheet, findItems, parseItemList, buildPriceImage, formatPrice, parseFile, matchListLines } from './lib/utiles.js';
 import { createUtilesStore, ESPERA_GENERANDO } from './lib/store.js';
 
 const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
@@ -644,6 +644,86 @@ test('útiles — isBusy true mientras genera la cotización del archivo', async
   await p;
   assert.equal(store.isBusy(from), false);
   assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — matchListLines separa cabecera, productos y omite dirección/libros', () => {
+  const { headers, items } = matchListLines(
+    ['Unidad Educativa San José', 'Grado: 5to Paralelo A', 'goma en barra', 'borrador', 'xyzfoo', 'Dirección: Av 5 de Junio', 'Libro de lectura'],
+    utiles
+  );
+  assert.deepEqual(headers, ['Unidad Educativa San José', 'Grado: 5to Paralelo A']);
+  assert.ok(items.some((it) => it.nombre.includes('Goma en Barra') && it.precio != null));
+  assert.ok(items.some((it) => it.nombre.includes('Borrador') && it.precio != null));
+  assert.ok(items.some((it) => it.nombre === 'xyzfoo' && it.precio == null));
+  assert.ok(!items.some((it) => /Dirección|Libro/.test(it.nombre)));
+});
+
+test('útiles — buildPriceImage con cabeceras genera PNG', async () => {
+  const png = await buildPriceImage(
+    [{ nombre: 'Goma en Barra Bester 8 g', precio: 0.56, qty: 2 }],
+    { headers: ['Unidad Educativa San José', 'Grado: 5to'] }
+  );
+  assert.equal(png[0], 0x89);
+  assert.equal(png[1], 0x50);
+});
+
+test('útiles — lista solo con cabeceras responde que no encontró', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990030';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('No encontré ninguno')));
+  assert.ok(!sent.some((m) => m.image));
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+});
+
+test('útiles — lista con cabeceras + productos cotiza solo los productos', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990031';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to\ngoma en barra\nborrador' });
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen');
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  const sel = store.getSeleccion(from);
+  assert.ok(sel.some((it) => it.nombre.includes('Goma')));
+  assert.ok(sel.some((it) => it.nombre.includes('Borrador')));
+  assert.equal(sel.length, 2);
+});
+
+test('útiles — matchListLines omite el pie de página', () => {
+  const { headers, items } = matchListLines(
+    ['Unidad Educativa X', 'goma en barra', 'Fecha de entrega: 3 de marzo', 'Firma del docente', 'Recuerde presentar la lista'],
+    utiles
+  );
+  assert.deepEqual(headers, ['Unidad Educativa X']);
+  assert.equal(items.length, 1);
+  assert.ok(items[0].nombre.includes('Goma en Barra'));
+  assert.ok(!items.some((it) => /Fecha|Firma|Recuerde/.test(it.nombre)));
+});
+
+test('útiles — matchListLines conserva el orden del documento', () => {
+  const { items } = matchListLines(['borrador', 'goma en barra', 'cartuchera', 'xyzfoo'], utiles);
+  assert.equal(items.length, 4);
+  assert.ok(items[0].nombre.includes('Borrador'));
+  assert.ok(items[1].nombre.includes('Goma en Barra'));
+  assert.ok(items[2].nombre.includes('Cartuchera'));
+  assert.equal(items[3].nombre, 'xyzfoo');
+});
+
+test('útiles — cotización mantiene el orden del documento', async () => {
+  const { store } = makeStore();
+  const from = '59399990032';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'borrador\ngoma en barra\ncartuchera' });
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 3);
+  assert.ok(sel[0].nombre.includes('Borrador'));
+  assert.ok(sel[1].nombre.includes('Goma en Barra'));
+  assert.ok(sel[2].nombre.includes('Cartuchera'));
 });
 
 after(() => {
