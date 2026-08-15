@@ -1,7 +1,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
+import { getUtilesProducts, getUtilesSheet, findItems, parseItemList, buildPriceImage, formatPrice, parseFile } from './lib/utiles.js';
+import { createUtilesStore } from './lib/store.js';
 
 const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
 const wb = await loadWorkbook(EXCEL_PATH);
@@ -224,9 +227,165 @@ test('desactivación — "hola bot" no desactiva', () => {
   assert.equal(isDeactivationMessage('hola bot'), false);
 });
 
+const UWB = await loadWorkbook('./UtilesEscolares.xlsx');
+const utiles = getUtilesProducts(getUtilesSheet(UWB));
+
+test('útiles — catálogo cargado', () => {
+  assert.equal(utiles.length, 40);
+});
+
+test('útiles — campos parseados', () => {
+  const goma = utiles.find((p) => p.producto.includes('Goma en Barra Bester 8 g'));
+  assert.ok(goma, 'debería existir Goma en Barra Bester 8 g');
+  assert.equal(goma.precio, 0.56);
+});
+
+test('útiles — findItems encuentra "goma en barra"', () => {
+  const hits = findItems('goma en barra', utiles);
+  assert.ok(hits.length >= 1);
+  assert.ok(hits[0].producto.includes('Goma en Barra'));
+});
+
+test('útiles — findItems sin resultados', () => {
+  assert.equal(findItems('xyzxyz qwerty', utiles).length, 0);
+});
+
+test('útiles — findItems por caja de lápices', () => {
+  const hits = findItems('caja de 12 lapices', utiles);
+  assert.ok(hits.some((p) => p.producto.includes('STAEDTLER Tradition HB')));
+});
+
+test('útiles — parseItemList limpia bullets y numeración', () => {
+  const lines = parseItemList('- goma\n2. lapiz\n• borrador\n');
+  assert.deepEqual(lines, ['goma', 'lapiz', 'borrador']);
+});
+
+test('útiles — formatPrice', () => {
+  assert.equal(formatPrice(1.58), '$1.58');
+  assert.equal(formatPrice(0.4), '$0.40');
+  assert.equal(formatPrice(null), 'No disponible');
+});
+
+test('útiles — buildPriceImage genera PNG', async () => {
+  const png = await buildPriceImage([
+    { nombre: 'Goma en Barra Bester 8 g', precio: 0.56, qty: 2 },
+    { nombre: 'Producto inexistente', precio: null, qty: 1 },
+  ]);
+  assert.equal(png[0], 0x89);
+  assert.equal(png[1], 0x50);
+});
+
+test('útiles — parseFile lee xlsx desde buffer', async () => {
+  const buf = readFileSync('./UtilesEscolares.xlsx');
+  const lines = await parseFile(buf, 'lista.xlsx');
+  assert.ok(lines.length > 5);
+  assert.ok(lines.some((l) => l.includes('Goma')));
+});
+
+const stores = [];
+function makeStore() {
+  const sent = [];
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: () => {},
+  });
+  stores.push(store);
+  return { store, sent };
+}
+
+test('útiles — saludo inicial en primer mensaje', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
+  assert.ok(sent.some((m) => m.body.includes('¿Te interesa cotizar')));
+  assert.equal(store.getState('59399990001'), 'SALUDO');
+});
+
+test('útiles — "no" en saludo se despide', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990004', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990004', { type: 'text', text: 'no' });
+  assert.ok(sent.some((m) => m.body.includes('Hasta luego')));
+  assert.equal(store.getState('59399990004'), undefined);
+});
+
+test('útiles — pregunta de pago responde transferencia', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990005', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990005', { type: 'text', text: '¿cómo puedo pagar?' });
+  assert.ok(sent.some((m) => m.body.includes('transferencia')));
+});
+
+test('útiles — foto no se procesa (sin OCR)', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990006', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990006', { type: 'image' });
+  assert.ok(sent.some((m) => m.body.includes('No puedo leer fotos')));
+});
+
+test('útiles — lista por texto genera imagen y pide confirmar pedido', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990002', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990002', { type: 'text', text: '1' });
+  assert.equal(store.getState('59399990002'), 'ESPERA_LISTA');
+  await store.handleMessage('59399990002', { type: 'text', text: 'goma en barra\nborrador\nxyzfoo' });
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen');
+  assert.equal(img.image[0], 0x89);
+  assert.ok(sent[sent.length - 1].body.includes('¿Deseas realizar el pedido?'));
+  assert.equal(store.getState('59399990002'), 'CONFIRMA_PEDIDO');
+});
+
+test('útiles — pedido completo hasta entrega y dirección', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990008';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ENTREGA');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'UBICACION_HORA');
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123, 3pm' });
+  assert.ok(sent.some((m) => typeof m.body === 'string' && m.body.includes('transferencia')));
+  assert.equal(store.getState(from), 'SEGUIMIENTO');
+});
+
+test('útiles — consulta de producto con varias opciones y cantidad', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990003';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  assert.equal(store.getState(from), 'SELECCION');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'CANTIDAD');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.ok(sent[sent.length - 1].body.includes('2 x Goma en Barra'));
+  assert.equal(store.getState(from), 'AGREGADO');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].qty, 2);
+});
+
+test('útiles — "eso es todo" genera imagen de selección', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990007';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
+  const imgs = sent.filter((m) => m.image);
+  assert.equal(imgs.length, 1);
+  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
+});
+
 after(() => {
+  for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
   console.log('1. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada). Ok para pruebas locales, no para produccion.');
   console.log('2. Corregidos: rama de serial por token (antes el regex agarraba "serial" primero), saludos muestran ayuda, intent mixto lista ambos estados, y typo "Lenvo" -> "Lenovo Thinkpad" en Laptops.xlsx.');
+  console.log('3. Flujo de utiles escolares: bot publico (no requiere autorizacion) con estados SALUDO -> ESPERA_LISTA/SELECCION/CANTIDAD -> CONFIRMA_PEDIDO -> ENTREGA -> UBICACION_HORA -> SEGUIMIENTO. Rutas en server.js: autorizado+sesion de equipos activa -> flujo laptops; "hola bot" autorizado activa; "hola bot" no autorizado -> silencio; todo lo demas -> flujo de utiles.');
   console.log('==================');
 });

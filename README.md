@@ -1,6 +1,9 @@
-# Bot WhatsApp para consulta de equipos
+# Bot WhatsApp para consulta de equipos y útiles escolares
 
-Bot que responde por WhatsApp las consultas sobre laptops (arrendadas/disponibles) leyendo directamente el archivo Excel `Laptops.xlsx`. Solo usuarios cuyos números estén en la hoja `Autorizacion` del Excel pueden consultar.
+Bot con dos flujos en WhatsApp:
+
+1. **Consulta de equipos** (laptops arrendadas/disponibles) leyendo `Laptops.xlsx`. Solo usuarios cuyos números estén en la hoja `Autorizacion` pueden activarlo (escribiendo `hola bot`).
+2. **Venta de útiles escolares** (público, sin autorización) leyendo `UtilesEscolares.xlsx`: cotiza listas de útiles, muestra precios con imagen y registra pedidos.
 
 **Producción**: desplegado en Render en `https://pc-venta-ia.onrender.com`, con YCloud como proveedor (BSP) para recibir/enviar mensajes. El endpoint del webhook es permanente y **no cambia**: `https://pc-venta-ia.onrender.com/webhook`.
 
@@ -12,8 +15,17 @@ Bot que responde por WhatsApp las consultas sobre laptops (arrendadas/disponible
 | `Autorizacion` | Fila 1 encabezado `Nombre`, `Celular`; desde fila 2 los números permitidos |
 
 - El número de celular se compara por sus últimos 9 dígitos, así que sirve tanto `593987695938` como `0987695938`.
-- Para que una persona pueda consultar, su número debe estar en `Autorizacion`.
+- Para que una persona pueda consultar equipos, su número debe estar en `Autorizacion` y escribir `hola bot`.
 - `Laptops.xlsx` contiene datos personales (Celular/Correo) → el repositorio de GitHub debe ser **privado**.
+
+### Estructura de `UtilesEscolares.xlsx`
+
+| Hoja | Contenido |
+|---|---|
+| `Hoja1` | Fila 1 encabezado `Producto | Descripcion | Precio de venta al publico`; desde fila 2 los ~40 productos |
+
+- Los precios se leen de la columna cuyo encabezado normalizado sea `precio de venta al publico` (tolera mayúsculas, acentos, NBSP y espacios finales).
+- Este catálogo es de uso público: cualquier persona que escriba al bot puede cotizar.
 
 ## Despliegue en Render (producción)
 
@@ -27,6 +39,7 @@ Bot que responde por WhatsApp las consultas sobre laptops (arrendadas/disponible
    - `YCLOUD_API_KEY` — API key de YCloud
    - `YCLOUD_PHONE` — número de negocio en E.164 (ej: `+593987695938`)
    - `YCLOUD_WEBHOOK_SECRET` — secreto del endpoint webhook de YCloud
+   - `UTILES_PATH` — ruta del catálogo de útiles (default `./UtilesEscolares.xlsx`)
    - Render asigna `PORT` automáticamente (default 10000); `server.js` ya lo usa.
 5. El servicio queda en `https://<nombre>.onrender.com`.
 
@@ -43,10 +56,10 @@ Render free duerme tras ~15 min de inactividad. Configurar un monitor gratuito e
 
 ## Cómo se actualizan los datos del Excel
 
-El servidor lee `Laptops.xlsx` al arrancar y lo cachea durante toda la vida del proceso. Para reflejar cambios:
+El servidor lee `Laptops.xlsx` y `UtilesEscolares.xlsx` al arrancar y los cachea durante toda la vida del proceso. Para reflejar cambios:
 
-1. Editar `Laptops.xlsx` localmente.
-2. Subir el archivo actualizado a GitHub (rama `main`) — el nombre debe seguir siendo `Laptops.xlsx`.
+1. Editar el archivo `.xlsx` localmente.
+2. Subir el archivo actualizado a GitHub (rama `main`) — los nombres deben seguir siendo `Laptops.xlsx` y `UtilesEscolares.xlsx`.
 3. Render redeploya automáticamente con cada push y el bot usa los datos nuevos.
 
 El endpoint de YCloud **no cambia** en este ciclo.
@@ -66,7 +79,9 @@ Sin `YCLOUD_API_KEY`/`PHONE_NUMBER_ID` configurados, las respuestas solo se logu
 
 ## Consultas que entiende el bot
 
-El bot solo responde a números autorizados (hoja `Autorizacion`) y **dentro de una sesión activa**. Un número no autorizado nunca recibe respuesta (la atiende un humano).
+### Flujo de equipos (autorizados)
+
+El bot de equipos solo responde a números autorizados (hoja `Autorizacion`) y **dentro de una sesión activa**.
 
 - Escribe `hola bot` para activar el bot (responde con el texto de ayuda). Mientras la sesión esté activa responde todas las consultas.
 - Escribe `chao bot` para desactivarlo (responde una despedida). Sin sesión activa el bot no responde nada.
@@ -79,10 +94,26 @@ Consultas dentro de una sesión:
 - `serial 7D9J4M3` (o un serial suelto) → detalle del equipo con ese serial
 - Cualquier texto con marca, empresa o usuario (`Dell`, `Mercado libre`, `Luis Ceron`) → coincidencias relevantes con su detalle
 
+### Flujo de útiles escolares (público)
+
+Cualquier persona que escriba al número recibe el flujo de útiles:
+
+- El primer mensaje responde con un saludo: `1. Sí, quiero enviar mi lista` / `2. No`.
+- Con `1` o `sí`, el bot pide la lista: puede escribirla por mensaje (un producto por línea) o adjuntarla en **PDF o Excel**.
+- Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen con la cotización** (precio por ítem y total) y pregunta si desea realizar el pedido.
+- También se puede preguntar por un producto directo (ej. `goma en barra`): muestra el precio y pide la cantidad; al final se arma la cotización.
+- Las **fotos no se leen** (sin OCR): se pide escribir la lista o adjuntarla en PDF/Excel.
+- Preguntas sobre `pago`/`transferencia` responden las condiciones de pago (mitad al confirmar, mitad al entregar).
+- Si el pedido se confirma, se pregunta por entrega a domicilio (con recargo) y luego la dirección y horario.
+- El chat se cierra por inactividad tras ~10 minutos (con avisos a los 5 y 7 minutos).
+
 ## Archivos
 
-- `server.js` — servidor Express, verificación de firmas (Meta y YCloud) y envío de respuestas por YCloud o Graph API
-- `lib/excel.js` — carga y parseo del `.xlsx` + validación de autorización
-- `lib/search.js` — lógica de interpretación de la pregunta y generación de la respuesta
-- `Laptops.xlsx` — datos (se cachea al arrancar; se actualiza vía push a GitHub + redeploy)
+- `server.js` — servidor Express, verificación de firmas (Meta y YCloud), routing de ambos flujos, media (upload/descarga) y envío por YCloud o Graph API
+- `lib/excel.js` — carga y parseo de los `.xlsx` + validación de autorización + `normalize()`
+- `lib/search.js` — lógica del flujo de equipos (interpretación y generación de respuesta)
+- `lib/utiles.js` — catálogo de útiles, búsqueda `findItems`, parseo de listas/archivos, `buildPriceImage` (sharp) y `formatPrice`
+- `lib/store.js` — máquina de estados del flujo de útiles, caché por sesión y timers de inactividad
+- `Laptops.xlsx` — datos de equipos (se cachea al arrancar; se actualiza vía push a GitHub + redeploy)
+- `UtilesEscolares.xlsx` — catálogo de útiles (idem)
 - `test-usability.mjs` — tests de usabilidad (ejecutar con `npm test`)
