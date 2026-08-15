@@ -22,7 +22,7 @@ Bot con dos flujos en WhatsApp:
 
 | Hoja | Contenido |
 |---|---|
-| `Hoja1` | Fila 1 encabezado `Producto | Descripcion | Precio de venta al publico`; desde fila 2 los ~40 productos |
+| `Hoja1` | Fila 1 encabezado `Producto | Descripcion | Precio de venta al publico`; desde fila 2 los ~58 productos |
 
 - Los precios se leen de la columna cuyo encabezado normalizado sea `precio de venta al publico` (tolera mayúsculas, acentos, NBSP y espacios finales).
 - Este catálogo es de uso público: cualquier persona que escriba al bot puede cotizar.
