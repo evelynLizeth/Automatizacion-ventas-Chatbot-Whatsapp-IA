@@ -648,8 +648,8 @@ test('útiles — matchListLines separa cabecera, productos y omite dirección/l
     utiles
   );
   assert.deepEqual(headers, ['Unidad Educativa San José', 'Grado: 5to Paralelo A']);
-  assert.ok(items.some((it) => it.nombre.includes('Goma en Barra') && it.precio != null));
-  assert.ok(items.some((it) => it.nombre.includes('Borrador') && it.precio != null));
+  assert.ok(items.some((it) => it.nombre === 'goma en barra' && it.precio != null));
+  assert.ok(items.some((it) => it.nombre === 'borrador' && it.precio != null));
   assert.ok(!items.some((it) => it.nombre === 'xyzfoo'), 'xyzfoo no pertenece a útiles y debe descartarse');
   assert.ok(!items.some((it) => /Dirección|Libro/.test(it.nombre)));
 });
@@ -684,8 +684,8 @@ test('útiles — lista con cabeceras + productos cotiza solo los productos', as
   assert.ok(img, 'debería enviar imagen');
   assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
   const sel = store.getSeleccion(from);
-  assert.ok(sel.some((it) => it.nombre.includes('Goma')));
-  assert.ok(sel.some((it) => it.nombre.includes('Borrador')));
+  assert.ok(sel.some((it) => it.nombre === 'goma en barra'));
+  assert.ok(sel.some((it) => it.nombre === 'borrador'));
   assert.equal(sel.length, 2);
 });
 
@@ -696,16 +696,16 @@ test('útiles — matchListLines omite el pie de página', () => {
   );
   assert.deepEqual(headers, ['Unidad Educativa X']);
   assert.equal(items.length, 1);
-  assert.ok(items[0].nombre.includes('Goma en Barra'));
+  assert.ok(items[0].nombre === 'goma en barra');
   assert.ok(!items.some((it) => /Fecha|Firma|Recuerde/.test(it.nombre)));
 });
 
 test('útiles — matchListLines conserva el orden del documento', () => {
   const { items } = matchListLines(['borrador', 'goma en barra', 'cartuchera', 'xyzfoo'], utiles);
   assert.equal(items.length, 3);
-  assert.ok(items[0].nombre.includes('Borrador'));
-  assert.ok(items[1].nombre.includes('Goma en Barra'));
-  assert.ok(items[2].nombre.includes('Cartuchera'));
+  assert.ok(items[0].nombre === 'borrador');
+  assert.ok(items[1].nombre === 'goma en barra');
+  assert.ok(items[2].nombre === 'cartuchera');
   assert.ok(!items.some((it) => it.nombre === 'xyzfoo'));
 });
 
@@ -716,7 +716,7 @@ test('útiles — cabecera solo curso/grado y unidad educativa/escuela/colegio',
   );
   assert.deepEqual(headers, ['Unidad Educativa San José', 'Grado: 5to']);
   assert.equal(items.length, 1);
-  assert.ok(items[0].nombre.includes('Goma en Barra'));
+  assert.ok(items[0].nombre === 'goma en barra');
 });
 
 test('útiles — ítems de útiles/limpieza fuera del catálogo van como No disponible', () => {
@@ -745,7 +745,8 @@ test('útiles — uniforme se omite de la cotización', () => {
 test('útiles — juego geométrico por nombre se cotiza con precio', () => {
   const { items } = matchListLines(['juego geometrico'], utiles);
   assert.equal(items.length, 1);
-  assert.ok(items[0].nombre.includes('Juego Geométrico'));
+  assert.equal(items[0].nombre, 'juego geometrico');
+  assert.ok(items[0].producto.includes('Juego Geométrico'));
   assert.notEqual(items[0].precio, null);
 });
 
@@ -769,9 +770,9 @@ test('útiles — cotización mantiene el orden del documento', async () => {
   await store.handleMessage(from, { type: 'text', text: 'borrador\ngoma en barra\ncartuchera' });
   const sel = store.getSeleccion(from);
   assert.equal(sel.length, 3);
-  assert.ok(sel[0].nombre.includes('Borrador'));
-  assert.ok(sel[1].nombre.includes('Goma en Barra'));
-  assert.ok(sel[2].nombre.includes('Cartuchera'));
+  assert.equal(sel[0].nombre, 'borrador');
+  assert.equal(sel[1].nombre, 'goma en barra');
+  assert.equal(sel[2].nombre, 'cartuchera');
 });
 
 after(() => {
