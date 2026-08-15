@@ -4,7 +4,7 @@ import express from 'express';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized } from './lib/excel.js';
 import { generateReply, HELP, DEACTIVATION_REPLY, isActivationMessage, isDeactivationMessage } from './lib/search.js';
 import { getUtilesProducts, getUtilesSheet } from './lib/utiles.js';
-import { createUtilesStore } from './lib/store.js';
+import { createUtilesStore, ESPERA_GENERANDO } from './lib/store.js';
 
 const app = express();
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf.toString('utf8'); } }));
@@ -298,6 +298,9 @@ app.post('/webhook', async (req, res) => {
 
   for (const msg of toMessages(req.body)) {
     if (!msg.from) continue;
+    if (utilesStore.isBusy(msg.from)) {
+      await sendWhatsApp(msg.from, ESPERA_GENERANDO, msg.businessFrom);
+    }
     runSerialized(msg.from, async () => {
       try {
         const isText = msg.type === 'text';

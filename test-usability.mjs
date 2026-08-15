@@ -556,11 +556,96 @@ test('útiles — texto en espera de comprobante re-pide el comprobante', async 
   assert.ok(sent[sent.length - 1].body.includes('comprobante'));
 });
 
+test('útiles — findItems no confunde "ya te envié el pdf" con cinta', () => {
+  assert.deepEqual(findItems('si ya te envié el pdf', utiles), []);
+});
+
+test('útiles — texto "ya te envié el pdf" en ESPERA_LISTA no busca producto', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990020';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'si ya te envié el pdf' });
+  assert.ok(sent[sent.length - 1].body.includes('No recibí tu archivo'));
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+});
+
+test('útiles — documento pide confirmación antes de generar', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990021';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('¿Genero la cotización')));
+  assert.equal(store.getState(from), 'CONFIRMA_ARCHIVO');
+});
+
+test('útiles — confirmar "sí" al documento genera la cotización', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990022';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('armando tu cotización')));
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen');
+  assert.ok(sent[sent.length - 1].body.includes('¿Es esta la cotización'));
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — "no" al documento: pregunta producto, luego catálogo disponible', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990023';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent[sent.length - 1].body.includes('¿Deseas preguntar por un producto específico'));
+  assert.equal(store.getState(from), 'PREGUNTA_PRODUCTO');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent[sent.length - 1].body.includes('¿Deseas ver lo que tengo disponible'));
+  assert.equal(store.getState(from), 'PREGUNTA_DISPONIBLE');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  const cat = sent[sent.length - 1].body;
+  assert.ok(cat.includes('Este es mi catálogo disponible'));
+  assert.ok(cat.includes('Goma'));
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+});
+
+test('útiles — "completar el pedido" en confirmación va a modificar', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990024';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  await store.handleMessage(from, { type: 'text', text: 'completar el pedido' });
+  assert.ok(sent[sent.length - 1].body.includes('Agregar más productos'));
+  assert.equal(store.getState(from), 'MODIFICAR');
+});
+
+test('útiles — isBusy true mientras genera la cotización del archivo', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990025';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
+  assert.equal(store.isBusy(from), false);
+  const p = store.handleMessage(from, { type: 'text', text: 'sí' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(store.isBusy(from), true);
+  await p;
+  assert.equal(store.isBusy(from), false);
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
 after(() => {
   for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
   console.log('1. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada). Ok para pruebas locales, no para produccion.');
   console.log('2. Corregidos: rama de serial por token (antes el regex agarraba "serial" primero), saludos muestran ayuda, intent mixto lista ambos estados, y typo "Lenvo" -> "Lenovo Thinkpad" en Laptops.xlsx.');
-  console.log('3. Flujo de utiles escolares: bot publico con estados SALUDO -> ESPERA_LISTA/SELECCION/CANTIDAD -> AGREGADO -> (SUGERENCIA -> CONFIRMA_SUGERENCIA -> MODELO_MOCHILA) -> CONFIRMA_COTIZACION -> ENTREGA -> UBICACION -> DIA_HORA -> CONFIRMA_PEDIDO (menú 1/2/3) -> ESPERA_COMPROBANTE (verificación manual del 50% a nombre de Evelyn Lizeth Zambrano) | MODIFICAR (agregar/retirar).');
+  console.log('3. Flujo de utiles escolares: bot publico con estados SALUDO -> ESPERA_LISTA/SELECCION/CANTIDAD -> AGREGADO -> (SUGERENCIA -> CONFIRMA_SUGERENCIA -> MODELO_MOCHILA) -> CONFIRMA_COTIZACION | CONFIRMA_ARCHIVO (confirmacion de PDF/Excel) -> PREGUNTA_PRODUCTO -> PREGUNTA_DISPONIBLE -> ENTREGA -> UBICACION -> DIA_HORA -> CONFIRMA_PEDIDO (menú 1/2/3) -> ESPERA_COMPROBANTE (verificación manual del 50% a nombre de Evelyn Lizeth Zambrano) | MODIFICAR (agregar/retirar).');
   console.log('==================');
 });
