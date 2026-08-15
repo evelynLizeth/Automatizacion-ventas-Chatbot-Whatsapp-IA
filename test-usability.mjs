@@ -442,10 +442,6 @@ test('útiles — flujo de sugerencias agrega un accesorio al pedido', async () 
   await store.handleMessage(from, { type: 'text', text: 'sí' });
   assert.equal(store.getState(from), 'MODELO_MOCHILA');
   await store.handleMessage(from, { type: 'text', text: 'cartuchera' });
-  assert.equal(store.getState(from), 'SELECCION');
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'CANTIDAD');
-  await store.handleMessage(from, { type: 'text', text: '1' });
   assert.equal(store.getState(from), 'AGREGADO');
   assert.ok(store.getSeleccion(from).some((it) => it.nombre === 'Cartuchera'));
   await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
@@ -654,7 +650,7 @@ test('útiles — matchListLines separa cabecera, productos y omite dirección/l
   assert.deepEqual(headers, ['Unidad Educativa San José', 'Grado: 5to Paralelo A']);
   assert.ok(items.some((it) => it.nombre.includes('Goma en Barra') && it.precio != null));
   assert.ok(items.some((it) => it.nombre.includes('Borrador') && it.precio != null));
-  assert.ok(items.some((it) => it.nombre === 'xyzfoo' && it.precio == null));
+  assert.ok(!items.some((it) => it.nombre === 'xyzfoo'), 'xyzfoo no pertenece a útiles y debe descartarse');
   assert.ok(!items.some((it) => /Dirección|Libro/.test(it.nombre)));
 });
 
@@ -706,11 +702,63 @@ test('útiles — matchListLines omite el pie de página', () => {
 
 test('útiles — matchListLines conserva el orden del documento', () => {
   const { items } = matchListLines(['borrador', 'goma en barra', 'cartuchera', 'xyzfoo'], utiles);
-  assert.equal(items.length, 4);
+  assert.equal(items.length, 3);
   assert.ok(items[0].nombre.includes('Borrador'));
   assert.ok(items[1].nombre.includes('Goma en Barra'));
   assert.ok(items[2].nombre.includes('Cartuchera'));
-  assert.equal(items[3].nombre, 'xyzfoo');
+  assert.ok(!items.some((it) => it.nombre === 'xyzfoo'));
+});
+
+test('útiles — cabecera solo curso/grado y unidad educativa/escuela/colegio', () => {
+  const { headers, items } = matchListLines(
+    ['Lista de útiles 2025', 'Unidad Educativa San José', 'Nombre del estudiante: Juan Pérez', 'Grado: 5to', 'goma en barra'],
+    utiles
+  );
+  assert.deepEqual(headers, ['Unidad Educativa San José', 'Grado: 5to']);
+  assert.equal(items.length, 1);
+  assert.ok(items[0].nombre.includes('Goma en Barra'));
+});
+
+test('útiles — ítems de útiles/limpieza fuera del catálogo van como No disponible', () => {
+  const { items } = matchListLines(
+    ['cuaderno universitario 100 hojas', 'escoba', 'cepillo dental', 'papel A4'],
+    utiles
+  );
+  assert.equal(items.length, 4);
+  for (const it of items) assert.equal(it.precio, null);
+  assert.ok(items.some((it) => it.nombre.includes('cuaderno universitario')));
+  assert.ok(items.some((it) => it.nombre === 'escoba'));
+  assert.ok(items.some((it) => it.nombre.includes('cepillo dental')));
+  assert.ok(items.some((it) => it.nombre.includes('papel A4')));
+});
+
+test('útiles — uniforme se omite de la cotización', () => {
+  const { headers, items } = matchListLines(
+    ['Unidad Educativa X', 'uniforme escolar', 'goma en barra'],
+    utiles
+  );
+  assert.deepEqual(headers, ['Unidad Educativa X']);
+  assert.equal(items.length, 1);
+  assert.ok(!items.some((it) => /uniforme/i.test(it.nombre)));
+});
+
+test('útiles — juego geométrico por nombre se cotiza con precio', () => {
+  const { items } = matchListLines(['juego geometrico'], utiles);
+  assert.equal(items.length, 1);
+  assert.ok(items[0].nombre.includes('Juego Geométrico'));
+  assert.notEqual(items[0].precio, null);
+});
+
+test('útiles — findItems elige Regla y no el Juego Geométrico', () => {
+  const hits = findItems('regla de 30 cm', utiles);
+  assert.equal(hits.length, 1);
+  assert.ok(hits[0].producto.includes('Regla Bester de 30 cm'));
+});
+
+test('útiles — findItems descarta matches solo por descripción', () => {
+  assert.equal(findItems('escuadra', utiles).length, 0);
+  assert.equal(findItems('borrador', utiles).length, 1);
+  assert.ok(findItems('borrador', utiles)[0].producto.includes('Borradores'));
 });
 
 test('útiles — cotización mantiene el orden del documento', async () => {
