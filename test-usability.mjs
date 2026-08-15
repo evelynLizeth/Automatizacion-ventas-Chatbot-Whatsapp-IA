@@ -282,6 +282,37 @@ test('útiles — parseFile lee xlsx desde buffer', async () => {
   assert.ok(lines.some((l) => l.includes('Goma')));
 });
 
+function makePdf(text) {
+  const objects = [];
+  objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objects[2] = '<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+  objects[3] =
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>';
+  const stream = `BT /F1 14 Tf 50 200 Td (${text.replace(/[()\\]/g, '\\$&')}) Tj ET`;
+  objects[4] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  objects[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  let body = '%PDF-1.4\n';
+  const offsets = {};
+  for (let i = 1; i <= 5; i += 1) {
+    offsets[i] = Buffer.byteLength(body, 'ascii');
+    body += `${i} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xrefPos = Buffer.byteLength(body, 'ascii');
+  body += 'xref\n0 6\n0000000000 65535 f \n';
+  for (let i = 1; i <= 5; i += 1) {
+    body += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  body += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+  return Buffer.from(body, 'ascii');
+}
+
+test('útiles — parseFile lee pdf desde buffer', async () => {
+  const buf = makePdf('Goma en barra');
+  const lines = await parseFile(buf, 'lista.pdf');
+  assert.ok(lines.length >= 1);
+  assert.ok(lines.some((l) => l.includes('Goma en barra')));
+});
+
 const stores = [];
 function makeStore() {
   const sent = [];

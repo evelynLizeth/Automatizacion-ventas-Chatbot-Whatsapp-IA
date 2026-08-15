@@ -14,6 +14,7 @@ WhatsApp bot (Node.js/Express, ESM) with two coexisting flows: (1) laptop querie
 - All matching/text goes through `normalize()` in `lib/excel.js:26` (lowercase + strip accents). `normalize()` also converts `\u00a0`→space and trims.
 
 ## Gotchas
+- `pdf-parse` is **v2** (ESM rewrite): use the class API in `lib/utiles.js` (`const { PDFParse } = await import('pdf-parse'); new PDFParse({ data: buffer }).getText()`), NOT the v1 `pdfParse(buffer)` function (throws `pdfParse is not a function`). Test `parseFile` with a PDF exists in `test-usability.mjs` (`makePdf` builds a minimal valid PDF in memory).
 - `server.js` caches both workbooks for the process lifetime (cache key `EXCEL_PATH|UTILES_PATH`). Edits to either `.xlsx` require restarting the server; in production (Render) that means pushing the updated file to GitHub `main` → auto-redeploy. The YCloud webhook URL never changes.
 - **Production runs on Render** (`pc-venta-ia.onrender.com`). Env vars live in the Render dashboard (`YCLOUD_API_KEY`, `YCLOUD_PHONE`, `YCLOUD_WEBHOOK_SECRET`), not in `.env`. The repo is private; `.env` and `node_modules` must never be committed.
 - Without `PHONE_NUMBER_ID`/`ACCESS_TOKEN` in `.env`, replies are only logged to console (dev mode). `.env` is gitignored; copy `.env.example`. Signature verification (Meta `x-hub-signature-256` and YCloud `ycloud-signature`) is skipped only when the corresponding secret is empty; when a secret is set, a request missing its signature header is rejected with `401`.
