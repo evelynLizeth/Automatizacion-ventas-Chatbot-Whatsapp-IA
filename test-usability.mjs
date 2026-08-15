@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
 import { getUtilesProducts, getUtilesSheet, findItems, parseItemList, buildPriceImage, formatPrice, parseFile } from './lib/utiles.js';
-import { createUtilesStore } from './lib/store.js';
+import { createUtilesStore, ESPERA_GENERANDO } from './lib/store.js';
 
 const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
 const wb = await loadWorkbook(EXCEL_PATH);
@@ -325,6 +325,11 @@ function makeStore() {
   stores.push(store);
   return { store, sent };
 }
+
+test('útiles — ESPERA_GENERANDO se exporta para el webhook', () => {
+  assert.equal(typeof ESPERA_GENERANDO, 'string');
+  assert.ok(ESPERA_GENERANDO.length > 0);
+});
 
 test('útiles — saludo inicial en primer mensaje', async () => {
   const { store, sent } = makeStore();
