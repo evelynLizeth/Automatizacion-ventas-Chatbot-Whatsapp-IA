@@ -324,7 +324,7 @@ test('útiles — foto no se procesa (sin OCR)', async () => {
   assert.ok(sent.some((m) => m.body.includes('No puedo leer fotos')));
 });
 
-test('útiles — lista por texto genera imagen y pide confirmar pedido', async () => {
+test('útiles — lista por texto genera imagen y pide confirmar la cotización', async () => {
   const { store, sent } = makeStore();
   await store.handleMessage('59399990002', { type: 'text', text: 'hola' });
   await store.handleMessage('59399990002', { type: 'text', text: '1' });
@@ -333,23 +333,32 @@ test('útiles — lista por texto genera imagen y pide confirmar pedido', async 
   const img = sent.find((m) => m.image);
   assert.ok(img, 'debería enviar imagen');
   assert.equal(img.image[0], 0x89);
-  assert.ok(sent[sent.length - 1].body.includes('¿Deseas realizar el pedido?'));
-  assert.equal(store.getState('59399990002'), 'CONFIRMA_PEDIDO');
+  assert.ok(sent[sent.length - 1].body.includes('¿Es esta la cotización'));
+  assert.equal(store.getState('59399990002'), 'CONFIRMA_COTIZACION');
 });
 
-test('útiles — pedido completo hasta entrega y dirección', async () => {
+test('útiles — pedido completo hasta comprobante', async () => {
   const { store, sent } = makeStore();
   const from = '59399990008';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
   await store.handleMessage(from, { type: 'text', text: '1' });
   assert.equal(store.getState(from), 'ENTREGA');
   await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'UBICACION_HORA');
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123, 3pm' });
-  assert.ok(sent.some((m) => typeof m.body === 'string' && m.body.includes('transferencia')));
-  assert.equal(store.getState(from), 'SEGUIMIENTO');
+  assert.equal(store.getState(from), 'UBICACION');
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  assert.equal(store.getState(from), 'DIA_HORA');
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
+  assert.ok(sent.some((m) => m.body && m.body.includes('Realizar el pedido')));
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  assert.ok(sent.some((m) => m.body && m.body.includes('50%')));
+  await store.handleMessage(from, { type: 'image' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Evelyn Lizeth Zambrano')));
+  assert.equal(store.getState(from), undefined);
 });
 
 test('útiles — consulta de producto con varias opciones y cantidad', async () => {
@@ -368,7 +377,7 @@ test('útiles — consulta de producto con varias opciones y cantidad', async ()
   assert.equal(sel[0].qty, 2);
 });
 
-test('útiles — "eso es todo" genera imagen de selección', async () => {
+test('útiles — "eso es todo" ofrece sugerencia y luego cotización preliminar', async () => {
   const { store, sent } = makeStore();
   const from = '59399990007';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
@@ -376,9 +385,144 @@ test('útiles — "eso es todo" genera imagen de selección', async () => {
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: '2' });
   await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
   const imgs = sent.filter((m) => m.image);
   assert.equal(imgs.length, 1);
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — flujo de sugerencias agrega un accesorio al pedido', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990009';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'CONFIRMA_SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'MODELO_MOCHILA');
+  await store.handleMessage(from, { type: 'text', text: 'cartuchera' });
+  assert.equal(store.getState(from), 'SELECCION');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'CANTIDAD');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  assert.ok(store.getSeleccion(from).some((it) => it.nombre === 'Cartuchera'));
+  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — modificar: retirar un producto', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990010';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
   assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'MODIFICAR');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'RETIRAR');
+  assert.ok(sent.some((m) => m.body && m.body.includes('Tu pedido actual')));
+  const count0 = store.getSeleccion(from).length;
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, count0 - 1);
+  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
+});
+
+test('útiles — modificar: agregar productos y volver a cotización final', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990011';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  await store.handleMessage(from, { type: 'text', text: 'cartuchera' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
+});
+
+test('útiles — "no estoy interesado" despide y cierra', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990012';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('órdenes')));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — dirección corta se re-pregunta', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990013';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'UBICACION');
+  await store.handleMessage(from, { type: 'text', text: 'x' });
+  assert.equal(store.getState(from), 'UBICACION');
+  assert.ok(sent[sent.length - 1].body.includes('dirección'));
+});
+
+test('útiles — comprobante por documento se registra y cierra', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990014';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  await store.handleMessage(from, { type: 'document', data: Buffer.from('x'), filename: 'comprobante.pdf' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Evelyn Lizeth Zambrano')));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — texto en espera de comprobante re-pide el comprobante', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990015';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  await store.handleMessage(from, { type: 'text', text: 'ya transferí' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  assert.ok(sent[sent.length - 1].body.includes('comprobante'));
 });
 
 after(() => {
@@ -386,6 +530,6 @@ after(() => {
   console.log('\n===== NOTAS =====');
   console.log('1. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada). Ok para pruebas locales, no para produccion.');
   console.log('2. Corregidos: rama de serial por token (antes el regex agarraba "serial" primero), saludos muestran ayuda, intent mixto lista ambos estados, y typo "Lenvo" -> "Lenovo Thinkpad" en Laptops.xlsx.');
-  console.log('3. Flujo de utiles escolares: bot publico (no requiere autorizacion) con estados SALUDO -> ESPERA_LISTA/SELECCION/CANTIDAD -> CONFIRMA_PEDIDO -> ENTREGA -> UBICACION_HORA -> SEGUIMIENTO. Rutas en server.js: autorizado+sesion de equipos activa -> flujo laptops; "hola bot" autorizado activa; "hola bot" no autorizado -> silencio; todo lo demas -> flujo de utiles.');
+  console.log('3. Flujo de utiles escolares: bot publico con estados SALUDO -> ESPERA_LISTA/SELECCION/CANTIDAD -> AGREGADO -> (SUGERENCIA -> CONFIRMA_SUGERENCIA -> MODELO_MOCHILA) -> CONFIRMA_COTIZACION -> ENTREGA -> UBICACION -> DIA_HORA -> CONFIRMA_PEDIDO (menú 1/2/3) -> ESPERA_COMPROBANTE (verificación manual del 50% a nombre de Evelyn Lizeth Zambrano) | MODIFICAR (agregar/retirar).');
   console.log('==================');
 });

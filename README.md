@@ -100,11 +100,12 @@ Cualquier persona que escriba al número recibe el flujo de útiles:
 
 - El primer mensaje responde con un saludo: `1. Sí, quiero enviar mi lista` / `2. No`.
 - Con `1` o `sí`, el bot pide la lista: puede escribirla por mensaje (un producto por línea) o adjuntarla en **PDF o Excel**.
-- Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen con la cotización** (precio por ítem y total) y pregunta si desea realizar el pedido.
-- También se puede preguntar por un producto directo (ej. `goma en barra`): muestra el precio y pide la cantidad; al final se arma la cotización.
+- Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen preliminar con la cotización** (precio por ítem y total) y pregunta si es la cotización deseada (`1. Sí` / `2. No, deseo modificarla`).
+- También se puede preguntar por un producto directo (ej. `goma en barra`): muestra el precio y pide la cantidad; al terminar puede sugerir mochilas/cartucheras/loncheras y luego se arma la cotización.
+- Al confirmar la cotización se pregunta por entrega a domicilio (con recargo), luego la **dirección** y el **día/horario de entrega**, y se envía la **imagen final de cotización con el bloque ENTREGA** más el menú `1. Realizar el pedido / 2. Deseo modificarlo / 3. No estoy interesado`.
+- Con `1`, el bot indica transferir el **50% (no reembolsable)** y el restante al recibir el producto, y pide adjuntar el comprobante. Al recibirlo, **no se verifica automáticamente (sin OCR)**: se agradece, se registra para el operador (cliente, total y 50% esperado, a nombre de Evelyn Lizeth Zambrano) y se cierra el chat.
 - Las **fotos no se leen** (sin OCR): se pide escribir la lista o adjuntarla en PDF/Excel.
 - Preguntas sobre `pago`/`transferencia` responden las condiciones de pago (mitad al confirmar, mitad al entregar).
-- Si el pedido se confirma, se pregunta por entrega a domicilio (con recargo) y luego la dirección y horario.
 - El chat se cierra por inactividad tras ~10 minutos (con avisos a los 5 y 7 minutos).
 
 ## Archivos
