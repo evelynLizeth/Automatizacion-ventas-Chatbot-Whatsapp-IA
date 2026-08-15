@@ -762,6 +762,48 @@ test('útiles — findItems descarta matches solo por descripción', () => {
   assert.ok(findItems('borrador', utiles)[0].producto.includes('Borradores'));
 });
 
+test('útiles — findItems elige Pintura Jumbo para pinturas (plural/singular)', () => {
+  for (const q of ['caja de pinturas triangulares', 'pinturas triangulares gigantes', 'pinturas', 'pinturas jumbo']) {
+    const hits = findItems(q, utiles);
+    assert.ok(hits.length >= 1, `${q} debería encontrar algo`);
+    assert.ok(hits[0].producto.includes('Pintura Jumbo Triangulare'), `${q} -> ${hits[0].producto}`);
+  }
+  assert.equal(findItems('caja de pinturas triangulares', utiles)[0].precio, 7.2);
+});
+
+test('útiles — findItems no confunde pinturas con la Caja de lápices', () => {
+  const hits = findItems('caja de pinturas triangulares', utiles);
+  assert.ok(!hits[0].producto.includes('Caja de 12 lápices'));
+});
+
+test('útiles — findItems "caja de 12 lapices" sigue eligiendo la Caja de 12', () => {
+  const hits = findItems('caja de 12 lapices', utiles);
+  assert.ok(hits[0].producto.includes('Caja de 12 lápices'));
+});
+
+test('útiles — findItems no cotiza "unidades" suelta', () => {
+  assert.equal(findItems('unidades', utiles).length, 0);
+});
+
+test('útiles — matchListLines fusiona la línea partida "12" + "unidades)"', () => {
+  const { items } = matchListLines(['1 caja de pinturas triangulares gigantes 12', 'unidades)'], utiles);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].nombre, '1 caja de pinturas triangulares gigantes 12 unidades)');
+  assert.equal(items[0].precio, 7.2);
+  assert.ok(items[0].producto.includes('Pintura Jumbo Triangulare'));
+});
+
+test('útiles — matchListLines descarta "unidades)" huérfana', () => {
+  const { items } = matchListLines(['unidades)'], utiles);
+  assert.equal(items.length, 0);
+});
+
+test('útiles — palabras nuevas de pertenencia salen como No disponible', () => {
+  const { items } = matchListLines(['archivador', 'mandil', 'rompecabezas', 'vaso', 'individual', 'pelota'], utiles);
+  assert.equal(items.length, 6);
+  for (const it of items) assert.equal(it.precio, null);
+});
+
 test('útiles — cotización mantiene el orden del documento', async () => {
   const { store } = makeStore();
   const from = '59399990032';
