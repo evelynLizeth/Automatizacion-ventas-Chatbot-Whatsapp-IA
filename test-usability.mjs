@@ -1004,15 +1004,23 @@ test('útiles IA — al recibir una lista marca recibir_lista y envía la cotiza
   assert.equal(sel[0].qty, 2);
 });
 
-test('fotos — findProductImage resuelve la imagen por número de producto', async () => {
+test('fotos — findProductImage resuelve la imagen por número, código o nombre', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'utiles-img-'));
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex');
   writeFileSync(path.join(dir, '3.png'), png);
+  writeFileSync(path.join(dir, 'Mochila cod 99999.jpeg'), png);
+  writeFileSync(path.join(dir, 'Otra mochila.png'), png);
   process.env.UTILES_IMAGES_DIR = dir;
   try {
-    const hit = findProductImage({ numero: 3 });
-    assert.ok(hit, 'debería resolver el archivo 3.png');
-    assert.ok(hit.endsWith(`${path.sep}3.png`));
+    const hitNum = findProductImage({ numero: 3 });
+    assert.ok(hitNum, 'debería resolver por número');
+    assert.ok(hitNum.endsWith(`${path.sep}3.png`));
+    const hitCod = findProductImage({ numero: 5, producto: 'Mochila cod 99999' });
+    assert.ok(hitCod, 'debería resolver por código del producto');
+    assert.ok(hitCod.endsWith(`${path.sep}Mochila cod 99999.jpeg`));
+    const hitName = findProductImage({ numero: 6, producto: 'Otra mochila escolar' });
+    assert.ok(hitName, 'debería resolver por nombre');
+    assert.ok(hitName.endsWith(`${path.sep}Otra mochila.png`));
     assert.equal(findProductImage({ numero: 99 }), null);
     assert.equal(findProductImage(null), null);
   } finally {
