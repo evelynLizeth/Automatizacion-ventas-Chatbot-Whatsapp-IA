@@ -1003,6 +1003,17 @@ test('útiles IA — el prompt incluye la regla de fotos con el enlace del catá
   assert.ok(last.system.includes('mochilas, cartucheras y loncheras'), 'debería aclarar las categorías con fotos');
 });
 
+test('útiles IA — el prompt pide enviar todas las fotos de la categoría y no el catálogo completo', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'ok' });
+  const from = '59399990121';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '¿qué mochilas tienes?' });
+  assert.ok(last.system.includes('TODOS los productos con foto'), 'debe pedir enviar todas las fotos de la categoría');
+  assert.ok(last.system.includes('qué mochilas tienes'), 'debe ejemplificar la pregunta por categoría');
+  assert.ok(last.system.includes('sin enviar la lista completa'), 'no debe enviar la lista completa salvo que la pidan');
+});
+
 test('útiles IA — el prompt incluye la regla de cotización', async () => {
   const { store, last } = makeIaCaptureStore({ reply: 'ok' });
   const from = '59399990111';
@@ -1115,6 +1126,28 @@ test('útiles IA — enviar_foto envía la foto del producto', async () => {
     await store.handleMessage(from, { type: 'text', text: 'muéstrame la foto' });
     assert.equal(store.getState(from), 'IA_CHAT');
     assert.ok(sent.some((m) => m.image), 'debería enviar la foto del producto');
+  } finally {
+    delete process.env.UTILES_IMAGES_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('útiles IA — enviar_foto con varios números envía todas las fotos (mochilas)', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'utiles-img-'));
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex');
+  writeFileSync(path.join(dir, '1.png'), png);
+  writeFileSync(path.join(dir, '2.png'), png);
+  writeFileSync(path.join(dir, '3.png'), png);
+  process.env.UTILES_IMAGES_DIR = dir;
+  try {
+    const { store, sent } = makeIaStore({ reply: 'Estas son las mochilas.', enviar_foto: [1, 2, 3] });
+    const from = '59399990122';
+    await store.handleMessage(from, { type: 'text', text: 'hola' });
+    await store.handleMessage(from, { type: 'text', text: '1' });
+    await store.handleMessage(from, { type: 'text', text: '¿qué mochilas tienes?' });
+    assert.equal(store.getState(from), 'IA_CHAT');
+    const images = sent.filter((m) => m.image);
+    assert.equal(images.length, 3, 'debería enviar una imagen por cada producto');
   } finally {
     delete process.env.UTILES_IMAGES_DIR;
     rmSync(dir, { recursive: true, force: true });
