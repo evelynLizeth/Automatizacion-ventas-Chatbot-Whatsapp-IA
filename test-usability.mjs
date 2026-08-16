@@ -467,6 +467,24 @@ function makeIaCaptureStore(reply) {
   return { store, sent, last };
 }
 
+function makeIaReceiptStore(reply, receiptReply) {
+  const sent = [];
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: () => {},
+    ai: {
+      isAiEnabled: () => true,
+      buildCatalogContext,
+      askGemini: async () => reply,
+      askGeminiReceipt: async (system, image, mimeType) => receiptReply,
+    },
+  });
+  stores.push(store);
+  return { store, sent };
+}
+
 test('útiles — saludo inicial muestra las 3 opciones (sin asesor)', async () => {
   const { store, sent } = makeStore();
   await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
@@ -852,7 +870,7 @@ test('útiles IA — aplica carrito del JSON de Gemini', async () => {
   assert.ok(sent.some((m) => m.body === 'Listo, agregué 2 gomas.'));
 });
 
-test('útiles IA — pedido_finalizado envía imagen final y pide comprobante', async () => {
+test('útiles IA — pedido_finalizado envía imagen final y no envía nada después de la confirmación', async () => {
   const { store, sent } = makeIaStore({
     reply: '¡Perfecto! Tu pedido está confirmado.',
     carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
@@ -864,8 +882,63 @@ test('útiles IA — pedido_finalizado envía imagen final y pide comprobante', 
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
   assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
   assert.ok(sent.some((m) => m.image), 'debería enviar la imagen final');
-  assert.ok(sent[sent.length - 1].body.includes('anticipo del 50%'));
+  assert.equal(sent[sent.length - 1].body, '¡Perfecto! Tu pedido está confirmado.', 'la confirmación debe ser el último mensaje');
+  assert.ok(!sent.some((m) => m.body && m.body.includes('anticipo del 50%')), 'no debe repetir instrucciones de pago tras confirmar');
   assert.equal(store.getSeleccion(from).length, 1);
+});
+
+test('útiles IA — comprobante válido con IA: agradece y cierra la sesión', async () => {
+  const { store, sent } = makeIaReceiptStore(
+    {
+      reply: '¡Excelente! Tu pedido está confirmado.',
+      carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+      pedido_finalizado: true,
+    },
+    { ok: true, monto: 1.25, titular: 'Evelyn Lizeth Zambrano' }
+  );
+  const from = '59399990118';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Verificamos tu comprobante')), 'debe agradecer tras verificar');
+  assert.ok(sent.some((m) => m.body && m.body.includes('1.25')), 'debe mencionar el monto verificado');
+  assert.equal(store.getState(from), undefined, 'la sesión debe cerrarse');
+});
+
+test('útiles IA — comprobante inválido con IA: avisa el detalle y sigue esperando', async () => {
+  const { store, sent } = makeIaReceiptStore(
+    {
+      reply: 'ok',
+      carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+      pedido_finalizado: true,
+    },
+    { ok: false, monto: 0.5, titular: 'Juan Pérez', motivo: 'el monto es menor al anticipo esperado' }
+  );
+  const from = '59399990119';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Revisamos tu comprobante')), 'debe avisar el detalle');
+  assert.ok(sent.some((m) => m.body && m.body.includes('el monto es menor al anticipo esperado')), 'debe incluir el motivo');
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE', 'debe seguir esperando el comprobante');
+});
+
+test('útiles IA — fallo de Gemini al revisar comprobante cae a verificación manual', async () => {
+  const { store, sent } = makeIaReceiptStore(
+    {
+      reply: 'ok',
+      carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+      pedido_finalizado: true,
+    },
+    null
+  );
+  const from = '59399990120';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Recibimos tu comprobante')), 'debe caer a verificación manual');
+  assert.equal(store.getState(from), 'ESPERA_CONFIRMACION_RECIBO');
 });
 
 test('útiles IA — despedirse cierra la sesión', async () => {
