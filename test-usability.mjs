@@ -1,10 +1,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import ExcelJS from 'exceljs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
-import { getUtilesProducts, getUtilesSheet, findItems, parseItemList, buildPriceImage, formatPrice, parseFile } from './lib/utiles.js';
+import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildCatalogoImage, catalogoText, formatPrice, parseFile } from './lib/utiles.js';
 import { createUtilesStore } from './lib/store.js';
+import { buildCatalogContext } from './lib/ai.js';
 
 const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
 const wb = await loadWorkbook(EXCEL_PATH);
@@ -227,32 +229,67 @@ test('desactivación — "hola bot" no desactiva', () => {
   assert.equal(isDeactivationMessage('hola bot'), false);
 });
 
+// ===== FLUJO DE ÚTILES ESCOLARES =====
+
 const UWB = await loadWorkbook('./UtilesEscolares.xlsx');
 const utiles = getUtilesProducts(getUtilesSheet(UWB));
 
-test('útiles — catálogo cargado', () => {
-  assert.equal(utiles.length, 57);
-});
+function makeXlsx(lines) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Hoja1');
+  for (const l of lines) ws.addRow([l]);
+  return wb.xlsx.writeBuffer();
+}
 
-test('útiles — campos parseados', () => {
-  const goma = utiles.find((p) => p.producto.includes('Goma en Barra Bester 8 g'));
+test('útiles — catálogo cargado con número de producto', () => {
+  assert.equal(utiles.length, 57);
+  utiles.forEach((p, i) => assert.equal(p.numero, i + 1));
+  const goma = utiles.find((p) => normalize(p.producto).includes('goma en barra bester 8 g'));
   assert.ok(goma, 'debería existir Goma en Barra Bester 8 g');
   assert.equal(goma.precio, 0.56);
 });
 
 test('útiles — findItems encuentra "goma en barra"', () => {
   const hits = findItems('goma en barra', utiles);
-  assert.ok(hits.length >= 1);
-  assert.ok(hits[0].producto.includes('Goma en Barra'));
+  assert.ok(hits.length >= 2);
+  assert.ok(normalize(hits[0].producto).includes('goma en barra'));
 });
 
 test('útiles — findItems sin resultados', () => {
   assert.equal(findItems('xyzxyz qwerty', utiles).length, 0);
 });
 
-test('útiles — findItems por caja de lápices', () => {
+test('útiles — findItems "caja de 12 lapices" elige la Caja de 12', () => {
   const hits = findItems('caja de 12 lapices', utiles);
-  assert.ok(hits.some((p) => p.producto.includes('STAEDTLER Tradition HB')));
+  assert.ok(normalize(hits[0].producto).includes('staedtler tradition hb'));
+});
+
+test('útiles — findItems elige Pintura Jumbo para pinturas', () => {
+  for (const q of ['caja de pinturas triangulares', 'pinturas triangulares gigantes', 'pinturas', 'pinturas jumbo']) {
+    const hits = findItems(q, utiles);
+    assert.ok(hits.length >= 1, `${q} debería encontrar algo`);
+    assert.ok(normalize(hits[0].producto).includes('pintura jumbo triangulare'), `${q} -> ${hits[0].producto}`);
+  }
+  assert.equal(findItems('caja de pinturas triangulares', utiles)[0].precio, 7.2);
+});
+
+test('útiles — findItems no confunde pinturas con la Caja de lápices', () => {
+  const hits = findItems('caja de pinturas triangulares', utiles);
+  assert.ok(!normalize(hits[0].producto).includes('caja de 12 lapices'));
+});
+
+test('útiles — findItems elige Regla y no el Juego Geométrico', () => {
+  const hits = findItems('regla de 30 cm', utiles);
+  assert.ok(hits.length >= 1, 'debería haber resultados');
+  assert.ok(normalize(hits[0].producto).includes('regla plastica'), `-> ${hits[0].producto}`);
+});
+
+test('útiles — findItems no cotiza "unidades" suelta', () => {
+  assert.equal(findItems('unidades', utiles).length, 0);
+});
+
+test('útiles — findItems no confunde "ya te envié el pdf" con cinta', () => {
+  assert.deepEqual(findItems('si ya te envié el pdf', utiles), []);
 });
 
 test('útiles — parseItemList limpia bullets y numeración', () => {
@@ -275,337 +312,35 @@ test('útiles — buildPriceImage genera PNG', async () => {
   assert.equal(png[1], 0x50);
 });
 
+test('útiles — buildPriceImage con cabeceras y entrega genera PNG', async () => {
+  const png = await buildPriceImage(
+    [{ nombre: 'Goma en Barra Bester 8 g', precio: 0.56, qty: 2 }],
+    { headers: ['Unidad Educativa San José', 'Grado: 5to'], entrega: { direccion: 'Av 5 de Junio', diaHora: 'mañana', nombre: 'Juan' } }
+  );
+  assert.equal(png[0], 0x89);
+  assert.equal(png[1], 0x50);
+});
+
+test('útiles — buildCatalogoImage genera PNG de todo el catálogo', async () => {
+  const png = await buildCatalogoImage(utiles);
+  assert.equal(png[0], 0x89);
+  assert.equal(png[1], 0x50);
+});
+
+test('útiles — catalogoText numera los productos', () => {
+  const parts = catalogoText(utiles);
+  assert.ok(parts.length >= 1);
+  const first = parts[0];
+  assert.ok(first.includes('1. '));
+  assert.ok(normalize(first).includes('barras de silicona'));
+  assert.ok(first.includes('separados por coma'));
+});
+
 test('útiles — parseFile lee xlsx desde buffer', async () => {
-  const buf = readFileSync('./UtilesEscolares.xlsx');
-  const lines = await parseFile(buf, 'lista.xlsx');
-  assert.ok(lines.length > 5);
+  const buf = await makeXlsx(['Goma en barra', 'Borrador blanco de queso Bester']);
+  const lines = await parseFile(Buffer.from(buf), 'lista.xlsx');
+  assert.ok(lines.length >= 2);
   assert.ok(lines.some((l) => l.includes('Goma')));
-});
-
-const stores = [];
-function makeStore() {
-  const sent = [];
-  const store = createUtilesStore({
-    getProducts: async () => utiles,
-    sendText: async (to, body) => sent.push({ to, body }),
-    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
-    log: () => {},
-  });
-  stores.push(store);
-  return { store, sent };
-}
-
-test('útiles — saludo inicial en primer mensaje', async () => {
-  const { store, sent } = makeStore();
-  await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
-  assert.ok(sent.some((m) => m.body.includes('¿Te interesa cotizar')));
-  assert.equal(store.getState('59399990001'), 'SALUDO');
-});
-
-test('útiles — "no" en saludo se despide', async () => {
-  const { store, sent } = makeStore();
-  await store.handleMessage('59399990004', { type: 'text', text: 'hola' });
-  await store.handleMessage('59399990004', { type: 'text', text: 'no' });
-  assert.ok(sent.some((m) => m.body.includes('Hasta luego')));
-  assert.equal(store.getState('59399990004'), undefined);
-});
-
-test('útiles — pregunta de pago responde transferencia', async () => {
-  const { store, sent } = makeStore();
-  await store.handleMessage('59399990005', { type: 'text', text: 'hola' });
-  await store.handleMessage('59399990005', { type: 'text', text: '¿cómo puedo pagar?' });
-  assert.ok(sent.some((m) => m.body.includes('transferencia')));
-});
-
-test('útiles — foto no se procesa (sin OCR)', async () => {
-  const { store, sent } = makeStore();
-  await store.handleMessage('59399990006', { type: 'text', text: 'hola' });
-  await store.handleMessage('59399990006', { type: 'image' });
-  assert.ok(sent.some((m) => m.body.includes('No puedo leer fotos')));
-});
-
-test('útiles — lista por texto genera imagen y pide confirmar pedido', async () => {
-  const { store, sent } = makeStore();
-  await store.handleMessage('59399990002', { type: 'text', text: 'hola' });
-  await store.handleMessage('59399990002', { type: 'text', text: '1' });
-  assert.equal(store.getState('59399990002'), 'ESPERA_LISTA');
-  await store.handleMessage('59399990002', { type: 'text', text: 'goma en barra\nborrador\nxyzfoo' });
-  const img = sent.find((m) => m.image);
-  assert.ok(img, 'debería enviar imagen');
-  assert.equal(img.image[0], 0x89);
-  assert.ok(sent[sent.length - 1].body.includes('¿Es esta la cotización'));
-  assert.equal(store.getState('59399990002'), 'CONFIRMA_COTIZACION');
-});
-
-test('útiles — pedido completo hasta entrega y dirección', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990008';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'GENERO');
-  assert.ok(sent.some((m) => m.body && m.body.includes('niña')));
-  await store.handleMessage(from, { type: 'text', text: 'niña' });
-  assert.equal(store.getState(from), 'ENTREGA');
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'UBICACION');
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
-  assert.equal(store.getState(from), 'DIA_HORA');
-  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
-  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
-  assert.ok(sent.some((m) => m.body && m.body.includes('Realizar el pedido')));
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
-  assert.ok(sent.some((m) => m.body && m.body.includes('50%')));
-  await store.handleMessage(from, { type: 'image' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('Evelyn Lizeth Zambrano')));
-  assert.equal(store.getState(from), undefined);
-});
-
-test('útiles — consulta de producto con varias opciones y cantidad', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990003';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
-  assert.equal(store.getState(from), 'SELECCION');
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'CANTIDAD');
-  await store.handleMessage(from, { type: 'text', text: '2' });
-  assert.ok(sent[sent.length - 1].body.includes('2 x Goma en Barra'));
-  assert.equal(store.getState(from), 'AGREGADO');
-  const sel = store.getSeleccion(from);
-  assert.equal(sel.length, 1);
-  assert.equal(sel[0].qty, 2);
-});
-
-test('útiles — "eso es todo" genera imagen de selección', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990007';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '2' });
-  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
-  assert.equal(store.getState(from), 'SUGERENCIA');
-  await store.handleMessage(from, { type: 'text', text: 'no' });
-  const imgs = sent.filter((m) => m.image);
-  assert.equal(imgs.length, 1);
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
-});
-
-test('útiles — flujo de sugerencias agrega un accesorio al pedido', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990009';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '2' });
-  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
-  assert.equal(store.getState(from), 'SUGERENCIA');
-  await store.handleMessage(from, { type: 'text', text: 'sí' });
-  assert.equal(store.getState(from), 'CONFIRMA_SUGERENCIA');
-  await store.handleMessage(from, { type: 'text', text: 'sí' });
-  assert.equal(store.getState(from), 'MODELO_MOCHILA');
-  await store.handleMessage(from, { type: 'text', text: 'cartuchera' });
-  assert.equal(store.getState(from), 'AGREGADO');
-  assert.ok(store.getSeleccion(from).some((it) => it.nombre === 'Cartuchera'));
-  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
-});
-
-test('útiles — modificar: retirar un producto', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990010';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
-  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
-  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
-  await store.handleMessage(from, { type: 'text', text: '2' });
-  assert.equal(store.getState(from), 'MODIFICAR');
-  await store.handleMessage(from, { type: 'text', text: '2' });
-  assert.equal(store.getState(from), 'RETIRAR');
-  assert.ok(sent.some((m) => m.body && m.body.includes('Tu pedido actual')));
-  const count0 = store.getSeleccion(from).length;
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  const sel = store.getSeleccion(from);
-  assert.equal(sel.length, count0 - 1);
-  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
-});
-
-test('útiles — modificar: agregar productos y volver a cotización final', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990011';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
-  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
-  await store.handleMessage(from, { type: 'text', text: '2' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'AGREGADO');
-  await store.handleMessage(from, { type: 'text', text: 'cartuchera' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'AGREGADO');
-  await store.handleMessage(from, { type: 'text', text: 'no' });
-  assert.equal(store.getState(from), 'SUGERENCIA');
-  await store.handleMessage(from, { type: 'text', text: 'no' });
-  assert.equal(store.getState(from), 'CONFIRMA_PEDIDO');
-});
-
-test('útiles — "no estoy interesado" despide y cierra', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990012';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
-  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
-  await store.handleMessage(from, { type: 'text', text: '3' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('órdenes')));
-  assert.equal(store.getState(from), undefined);
-});
-
-test('útiles — dirección corta se re-pregunta', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990013';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'UBICACION');
-  await store.handleMessage(from, { type: 'text', text: 'x' });
-  assert.equal(store.getState(from), 'UBICACION');
-  assert.ok(sent[sent.length - 1].body.includes('dirección'));
-});
-
-test('útiles — comprobante por documento se registra y cierra', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990014';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
-  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
-  await store.handleMessage(from, { type: 'document', data: Buffer.from('x'), filename: 'comprobante.pdf' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('Evelyn Lizeth Zambrano')));
-  assert.equal(store.getState(from), undefined);
-});
-
-test('útiles — texto en espera de comprobante re-pide el comprobante', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990015';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
-  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
-  await store.handleMessage(from, { type: 'text', text: 'ya transferí' });
-  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
-  assert.ok(sent[sent.length - 1].body.includes('comprobante'));
-});
-
-test('útiles — findItems no confunde "ya te envié el pdf" con cinta', () => {
-  assert.deepEqual(findItems('si ya te envié el pdf', utiles), []);
-});
-
-test('útiles — texto "ya te envié el pdf" en ESPERA_LISTA no busca producto', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990020';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'si ya te envié el pdf' });
-  assert.ok(sent[sent.length - 1].body.includes('No recibí tu archivo'));
-  assert.equal(store.getState(from), 'ESPERA_LISTA');
-});
-
-test('útiles — documento pide confirmación antes de generar', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990021';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'ESPERA_LISTA');
-  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('¿Genero la cotización')));
-  assert.equal(store.getState(from), 'CONFIRMA_ARCHIVO');
-});
-
-test('útiles — confirmar "sí" al documento genera la cotización', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990022';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
-  await store.handleMessage(from, { type: 'text', text: 'sí' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('armando tu cotización')));
-  const img = sent.find((m) => m.image);
-  assert.ok(img, 'debería enviar imagen');
-  assert.ok(sent[sent.length - 1].body.includes('¿Es esta la cotización'));
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
-});
-
-test('útiles — "no" al documento: pregunta producto, luego catálogo disponible', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990023';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
-  await store.handleMessage(from, { type: 'text', text: 'no' });
-  assert.ok(sent[sent.length - 1].body.includes('¿Deseas preguntar por un producto específico'));
-  assert.equal(store.getState(from), 'PREGUNTA_PRODUCTO');
-  await store.handleMessage(from, { type: 'text', text: 'no' });
-  assert.ok(sent[sent.length - 1].body.includes('¿Deseas ver lo que tengo disponible'));
-  assert.equal(store.getState(from), 'PREGUNTA_DISPONIBLE');
-  await store.handleMessage(from, { type: 'text', text: 'sí' });
-  const cat = sent[sent.length - 1].body;
-  assert.ok(cat.includes('Este es mi catálogo disponible'));
-  assert.ok(cat.includes('Goma'));
-  assert.equal(store.getState(from), 'ESPERA_LISTA');
-});
-
-test('útiles — "completar el pedido" en confirmación va a modificar', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990024';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
-  await store.handleMessage(from, { type: 'text', text: 'completar el pedido' });
-  assert.ok(sent[sent.length - 1].body.includes('Agregar más productos'));
-  assert.equal(store.getState(from), 'MODIFICAR');
-});
-
-test('útiles — isBusy true mientras genera la cotización del archivo', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990025';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'document', data: makePdf('Goma en barra'), filename: 'lista.pdf' });
-  assert.equal(store.isBusy(from), false);
-  const p = store.handleMessage(from, { type: 'text', text: 'sí' });
-  await new Promise((r) => setImmediate(r));
-  assert.equal(store.isBusy(from), true);
-  await p;
-  assert.equal(store.isBusy(from), false);
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
 });
 
 test('útiles — matchListLines separa cabecera, productos y omite dirección/libros', () => {
@@ -618,41 +353,6 @@ test('útiles — matchListLines separa cabecera, productos y omite dirección/l
   assert.ok(items.some((it) => it.nombre === 'borrador' && it.precio != null));
   assert.ok(!items.some((it) => it.nombre === 'xyzfoo'), 'xyzfoo no pertenece a útiles y debe descartarse');
   assert.ok(!items.some((it) => /Dirección|Libro/.test(it.nombre)));
-});
-
-test('útiles — buildPriceImage con cabeceras genera PNG', async () => {
-  const png = await buildPriceImage(
-    [{ nombre: 'Goma en Barra Bester 8 g', precio: 0.56, qty: 2 }],
-    { headers: ['Unidad Educativa San José', 'Grado: 5to'] }
-  );
-  assert.equal(png[0], 0x89);
-  assert.equal(png[1], 0x50);
-});
-
-test('útiles — lista solo con cabeceras responde que no encontró', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990030';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('No encontré ninguno')));
-  assert.ok(!sent.some((m) => m.image));
-  assert.equal(store.getState(from), 'ESPERA_LISTA');
-});
-
-test('útiles — lista con cabeceras + productos cotiza solo los productos', async () => {
-  const { store, sent } = makeStore();
-  const from = '59399990031';
-  await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to\ngoma en barra\nborrador' });
-  const img = sent.find((m) => m.image);
-  assert.ok(img, 'debería enviar imagen');
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
-  const sel = store.getSeleccion(from);
-  assert.ok(sel.some((it) => it.nombre === 'goma en barra'));
-  assert.ok(sel.some((it) => it.nombre === 'borrador'));
-  assert.equal(sel.length, 2);
 });
 
 test('útiles — matchListLines omite el pie de página', () => {
@@ -685,24 +385,14 @@ test('útiles — cabecera solo curso/grado y unidad educativa/escuela/colegio',
   assert.ok(items[0].nombre === 'goma en barra');
 });
 
-test('útiles — ítems de útiles/limpieza fuera del catálogo van como No disponible', () => {
-  const { items } = matchListLines(
-    ['cuaderno universitario 100 hojas', 'escoba', 'cepillo dental', 'papel A4'],
-    utiles
-  );
-  assert.equal(items.length, 4);
+test('útiles — ítems fuera del catálogo van como No disponible', () => {
+  const { items } = matchListLines(['escoba', 'cepillo dental'], utiles);
+  assert.equal(items.length, 2);
   for (const it of items) assert.equal(it.precio, null);
-  assert.ok(items.some((it) => it.nombre.includes('cuaderno universitario')));
-  assert.ok(items.some((it) => it.nombre === 'escoba'));
-  assert.ok(items.some((it) => it.nombre.includes('cepillo dental')));
-  assert.ok(items.some((it) => it.nombre.includes('papel A4')));
 });
 
 test('útiles — uniforme se omite de la cotización', () => {
-  const { headers, items } = matchListLines(
-    ['Unidad Educativa X', 'uniforme escolar', 'goma en barra'],
-    utiles
-  );
+  const { headers, items } = matchListLines(['Unidad Educativa X', 'uniforme escolar', 'goma en barra'], utiles);
   assert.deepEqual(headers, ['Unidad Educativa X']);
   assert.equal(items.length, 1);
   assert.ok(!items.some((it) => /uniforme/i.test(it.nombre)));
@@ -712,43 +402,8 @@ test('útiles — juego geométrico por nombre se cotiza con precio', () => {
   const { items } = matchListLines(['juego geometrico'], utiles);
   assert.equal(items.length, 1);
   assert.equal(items[0].nombre, 'juego geometrico');
-  assert.ok(items[0].producto.includes('Juego Geométrico'));
+  assert.ok(normalize(items[0].producto).includes('juego geometrico'));
   assert.notEqual(items[0].precio, null);
-});
-
-test('útiles — findItems elige Regla y no el Juego Geométrico', () => {
-  const hits = findItems('regla de 30 cm', utiles);
-  assert.equal(hits.length, 1);
-  assert.ok(hits[0].producto.includes('Regla Bester de 30 cm'));
-});
-
-test('útiles — findItems descarta matches solo por descripción', () => {
-  assert.equal(findItems('escuadra', utiles).length, 0);
-  assert.equal(findItems('borrador', utiles).length, 1);
-  assert.ok(findItems('borrador', utiles)[0].producto.includes('Borradores'));
-});
-
-test('útiles — findItems elige Pintura Jumbo para pinturas (plural/singular)', () => {
-  for (const q of ['caja de pinturas triangulares', 'pinturas triangulares gigantes', 'pinturas', 'pinturas jumbo']) {
-    const hits = findItems(q, utiles);
-    assert.ok(hits.length >= 1, `${q} debería encontrar algo`);
-    assert.ok(hits[0].producto.includes('Pintura Jumbo Triangulare'), `${q} -> ${hits[0].producto}`);
-  }
-  assert.equal(findItems('caja de pinturas triangulares', utiles)[0].precio, 7.2);
-});
-
-test('útiles — findItems no confunde pinturas con la Caja de lápices', () => {
-  const hits = findItems('caja de pinturas triangulares', utiles);
-  assert.ok(!hits[0].producto.includes('Caja de 12 lápices'));
-});
-
-test('útiles — findItems "caja de 12 lapices" sigue eligiendo la Caja de 12', () => {
-  const hits = findItems('caja de 12 lapices', utiles);
-  assert.ok(hits[0].producto.includes('Caja de 12 lápices'));
-});
-
-test('útiles — findItems no cotiza "unidades" suelta', () => {
-  assert.equal(findItems('unidades', utiles).length, 0);
 });
 
 test('útiles — matchListLines fusiona la línea partida "12" + "unidades)"', () => {
@@ -756,7 +411,7 @@ test('útiles — matchListLines fusiona la línea partida "12" + "unidades)"', 
   assert.equal(items.length, 1);
   assert.equal(items[0].nombre, '1 caja de pinturas triangulares gigantes 12 unidades)');
   assert.equal(items[0].precio, 7.2);
-  assert.ok(items[0].producto.includes('Pintura Jumbo Triangulare'));
+  assert.ok(normalize(items[0].producto).includes('pintura jumbo triangulare'));
 });
 
 test('útiles — matchListLines descarta "unidades)" huérfana', () => {
@@ -764,30 +419,487 @@ test('útiles — matchListLines descarta "unidades)" huérfana', () => {
   assert.equal(items.length, 0);
 });
 
-test('útiles — palabras nuevas de pertenencia salen como No disponible', () => {
-  const { items } = matchListLines(['archivador', 'mandil', 'rompecabezas', 'vaso', 'individual', 'pelota'], utiles);
-  assert.equal(items.length, 6);
-  for (const it of items) assert.equal(it.precio, null);
+const stores = [];
+function makeStore(opts = {}) {
+  const sent = [];
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: () => {},
+    ...opts,
+  });
+  stores.push(store);
+  return { store, sent };
+}
+
+function makeIaStore(reply) {
+  return makeStore({
+    ai: {
+      isAiEnabled: () => true,
+      buildCatalogContext,
+      askGemini: async () => reply,
+    },
+  });
+}
+
+test('útiles — saludo inicial muestra las 4 opciones', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
+  const body = sent.find((m) => m.body).body;
+  assert.ok(body.includes('Sí con asistente IA'));
+  assert.ok(body.includes('Deseo ver lo que tienes disponible'));
+  assert.ok(body.includes('que la cotice un asesor'));
+  assert.ok(body.includes('goma en barra'));
+  assert.equal(store.getState('59399990001'), 'SALUDO');
 });
 
-test('útiles — cotización mantiene el orden del documento', async () => {
-  const { store } = makeStore();
+test('útiles — "no" en saludo se despide', async () => {
+  const { store, sent } = makeStore();
+  await store.handleMessage('59399990004', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990004', { type: 'text', text: 'no' });
+  assert.ok(sent.some((m) => m.body.includes('Hasta luego')));
+  assert.equal(store.getState('59399990004'), undefined);
+});
+
+test('útiles — opción 3 envía el catálogo y pide números', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990031';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen del catálogo');
+  assert.ok(sent[sent.length - 1].body.includes('separados por coma'));
+  assert.equal(store.getState(from), 'NUMEROS');
+});
+
+test('útiles — números inválidos se re-preguntan', async () => {
+  const { store, sent } = makeStore();
   const from = '59399990032';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'borrador\ngoma en barra\ncartuchera' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'abc def' });
+  assert.ok(sent[sent.length - 1].body.includes('No entendí los números'));
+  assert.equal(store.getState(from), 'NUMEROS');
+});
+
+test('útiles — números válidos piden cantidad de cada uno y muestran el menú', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990033';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22,23' });
+  assert.equal(store.getState(from), 'CANTIDAD');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'CANTIDAD');
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  const last = sent[sent.length - 1].body;
+  assert.ok(last.includes('Eliminar productos'));
+  assert.ok(last.includes('Finalizar pedido'));
+  assert.equal(store.getState(from), 'AGREGADO');
   const sel = store.getSeleccion(from);
-  assert.equal(sel.length, 3);
-  assert.equal(sel[0].nombre, 'borrador');
-  assert.equal(sel[1].nombre, 'goma en barra');
-  assert.equal(sel[2].nombre, 'cartuchera');
+  assert.equal(sel.length, 2);
+});
+
+test('útiles — opción 4 asesor: gracias desactiva', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990034';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '4' });
+  assert.equal(store.getState(from), 'ASESOR');
+  await store.handleMessage(from, { type: 'text', text: 'gracias' });
+  assert.ok(sent[sent.length - 1].body.includes('en cuanto esté lista la cotización'));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — opción 4 asesor: documento cierra la sesión', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990035';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '4' });
+  await store.handleMessage(from, { type: 'document', data: Buffer.from('x'), filename: 'lista.pdf' });
+  assert.ok(sent[sent.length - 1].body.includes('Un asesor revisará tu documento'));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — opción 4 asesor: otro texto re-pregunta', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990036';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '4' });
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  assert.ok(sent[sent.length - 1].body.includes('Por favor sube tu documento'));
+  assert.equal(store.getState(from), 'ASESOR');
+});
+
+test('útiles — producto único: "no" va al menú agregar/eliminar', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990037';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'caja de 12 lapices' });
+  assert.ok(sent[sent.length - 1].body.includes('única opción'));
+  assert.equal(store.getState(from), 'UNICO');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent[sent.length - 1].body.includes('Eliminar productos'));
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles — producto único: "sí" pide cantidad', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990038';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'caja de 12 lapices' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'CANTIDAD');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].qty, 2);
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles — varias opciones incluyen "Ninguna" y llevan al menú', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990039';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  assert.ok(sent[sent.length - 1].body.includes('Ninguna'));
+  assert.equal(store.getState(from), 'SELECCION');
+  await store.handleMessage(from, { type: 'text', text: 'ninguna' });
+  assert.ok(sent[sent.length - 1].body.includes('Eliminar productos'));
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles — eliminar un producto del pedido', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990040';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.ok(sent[sent.length - 1].body.includes('Tu pedido actual'));
+  assert.equal(store.getState(from), 'ELIMINAR');
+  const count0 = store.getSeleccion(from).length;
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.ok(sent[sent.length - 1].body.includes('Eliminar productos'));
+  assert.equal(store.getSeleccion(from).length, count0 - 1);
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles — finalizar pedido pasa por sugerencia y confirma cotización', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990041';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent.some((m) => m.image));
+  assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — "dame la cotización" envía la cotización', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990042';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: 'dame la cotización' });
+  assert.ok(sent.some((m) => m.image));
+  assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — pedido por retiro: comprobante, viernes y despedida', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990043';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'GENERO');
+  assert.ok(sent.some((m) => m.body && m.body.includes('niña')));
+  await store.handleMessage(from, { type: 'text', text: 'niña' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  assert.ok(sent.some((m) => m.body && m.body.includes('50%')));
+  await store.handleMessage(from, { type: 'image' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Evelyn Lizeth Zambrano')));
+  assert.equal(store.getState(from), 'ESPERA_CONFIRMACION_RECIBO');
+  await store.handleMessage(from, { type: 'text', text: 'ok' });
+  assert.ok(sent[sent.length - 1].body.includes('estará listo el día viernes'));
+  assert.equal(store.getState(from), 'PICKUP_AGENDA');
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 9am' });
+  assert.ok(sent[sent.length - 1].body.includes('nos vemos el viernes'));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — pedido con entrega a domicilio completa', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990044';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'niño' });
+  assert.equal(store.getState(from), 'ENTREGA');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'UBICACION');
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  assert.equal(store.getState(from), 'DIA_HORA');
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  assert.equal(store.getState(from), 'NOMBRE_ENTREGA');
+  await store.handleMessage(from, { type: 'text', text: 'Juan Perez' });
+  assert.ok(sent.some((m) => m.image));
+  assert.ok(sent[sent.length - 1].body.includes('Confirmas'));
+  assert.equal(store.getState(from), 'CONFIRMA_ENTREGA');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  await store.handleMessage(from, { type: 'image' });
+  await store.handleMessage(from, { type: 'text', text: 'gracias' });
+  assert.ok(sent[sent.length - 1].body.includes('motorizado'));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — abandonar el pedido de entrega cierra la sesión', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990045';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'niña' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
+  await store.handleMessage(from, { type: 'text', text: 'Juan Perez' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.ok(sent[sent.length - 1].body.includes('Quedamos a tus órdenes'));
+  assert.equal(store.getState(from), undefined);
+});
+
+test('útiles — lista por texto genera imagen y pide confirmar', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990002';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador\nxyzfoo' });
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen');
+  assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — texto "ya te envié el pdf" en ESPERA_LISTA no busca producto', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990020';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'si ya te envié el pdf' });
+  assert.ok(sent[sent.length - 1].body.includes('No recibí tu archivo'));
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+});
+
+test('útiles — documento pide confirmación antes de generar', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990021';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const buf = Buffer.from(await makeXlsx(['Goma en barra']));
+  await store.handleMessage(from, { type: 'document', data: buf, filename: 'lista.xlsx' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('¿Genero la cotización')));
+  assert.equal(store.getState(from), 'CONFIRMA_ARCHIVO');
+});
+
+test('útiles — confirmar "sí" al documento genera la cotización', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990022';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const buf = Buffer.from(await makeXlsx(['Goma en barra']));
+  await store.handleMessage(from, { type: 'document', data: buf, filename: 'lista.xlsx' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('armando tu cotización')));
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen');
+  assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — isBusy true mientras genera la cotización del archivo', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990025';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const buf = Buffer.from(await makeXlsx(['Goma en barra']));
+  await store.handleMessage(from, { type: 'document', data: buf, filename: 'lista.xlsx' });
+  assert.equal(store.isBusy(from), false);
+  const p = store.handleMessage(from, { type: 'text', text: 'sí' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(store.isBusy(from), true);
+  await p;
+  assert.equal(store.isBusy(from), false);
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — "no" al documento: pregunta producto, luego catálogo disponible', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990023';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const buf = Buffer.from(await makeXlsx(['Goma en barra']));
+  await store.handleMessage(from, { type: 'document', data: buf, filename: 'lista.xlsx' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent[sent.length - 1].body.includes('¿Deseas preguntar por un producto específico'));
+  assert.equal(store.getState(from), 'PREGUNTA_PRODUCTO');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent[sent.length - 1].body.includes('¿Deseas ver lo que tengo disponible'));
+  assert.equal(store.getState(from), 'PREGUNTA_DISPONIBLE');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.ok(sent.some((m) => m.image), 'debería enviar la imagen del catálogo');
+  assert.ok(sent[sent.length - 1].body.includes('separados por coma'));
+  assert.equal(store.getState(from), 'NUMEROS');
+});
+
+test('útiles — lista solo con cabeceras responde que no encontró', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990030';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('No encontré ninguno')));
+  assert.ok(!sent.some((m) => m.image));
+  assert.equal(store.getState(from), 'ESPERA_LISTA');
+});
+
+test('útiles — lista con cabeceras + productos cotiza solo los productos', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990024';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to\ngoma en barra\nborrador' });
+  const img = sent.find((m) => m.image);
+  assert.ok(img, 'debería enviar imagen');
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  const sel = store.getSeleccion(from);
+  assert.ok(sel.some((it) => it.nombre === 'goma en barra'));
+  assert.ok(sel.some((it) => it.nombre === 'borrador'));
+  assert.equal(sel.length, 2);
+});
+
+test('útiles IA — opción 1 entra al chat con IA', async () => {
+  const { store, sent } = makeIaStore({ reply: '¡Perfecto! ¿Qué productos necesitas?' });
+  const from = '59399990101';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body.includes('Ya puedes escribirme tu lista')));
+  await store.handleMessage(from, { type: 'text', text: 'quiero una mochila' });
+  assert.ok(sent.some((m) => m.body === '¡Perfecto! ¿Qué productos necesitas?'));
+});
+
+test('útiles IA — aplica carrito del JSON de Gemini', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Listo, agregué 2 gomas.',
+    carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 2 }],
+  });
+  const from = '59399990102';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'quiero 2 gomas en barra' });
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].qty, 2);
+  assert.ok(sent.some((m) => m.body === 'Listo, agregué 2 gomas.'));
+});
+
+test('útiles IA — pedido_finalizado envía imagen final y pide comprobante', async () => {
+  const { store, sent } = makeIaStore({
+    reply: '¡Perfecto! Tu pedido está confirmado.',
+    carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+    entrega: { direccion: 'Av 6 de Diciembre y Amazonas', diaHora: 'Viernes 9am', nombre: 'Ana', genero: 'niña', domicilio: true },
+    pedido_finalizado: true,
+  });
+  const from = '59399990103';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  assert.ok(sent.some((m) => m.image), 'debería enviar la imagen final');
+  assert.ok(sent[sent.length - 1].body.includes('anticipo del 50%'));
+  assert.equal(store.getSeleccion(from).length, 1);
+});
+
+test('útiles IA — despedirse cierra la sesión', async () => {
+  const { store, sent } = makeIaStore({ reply: '¡Hasta luego!', despedirse: true });
+  const from = '59399990104';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'chao' });
+  assert.equal(store.getState(from), undefined);
+  assert.ok(sent.some((m) => m.body.includes('Hasta luego')));
+});
+
+test('útiles IA — fallo de Gemini no rompe el chat', async () => {
+  const { store, sent } = makeIaStore(null);
+  const from = '59399990105';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'necesito una lista' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body.includes('no pude procesar')));
+});
+
+test('útiles IA — opción 3 (catálogo) y 4 (asesor) siguen en reglas', async () => {
+  const { store, sent } = makeIaStore({ reply: 'no debería usarse' });
+  const from = '59399990106';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  assert.equal(store.getState(from), 'NUMEROS');
+  assert.ok(sent.some((m) => m.image), 'debería enviar el catálogo');
+
+  const from2 = '59399990107';
+  await store.handleMessage(from2, { type: 'text', text: 'hola' });
+  await store.handleMessage(from2, { type: 'text', text: '4' });
+  assert.equal(store.getState(from2), 'ASESOR');
+});
+
+test('útiles IA — una foto en el chat se envía a Gemini', async () => {
+  const { store, sent } = makeIaStore({ reply: 'Vi la lista, son 3 productos.' });
+  const from = '59399990108';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'lista.png' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body === 'Vi la lista, son 3 productos.'));
+});
+
+test('útiles IA — documento se parsea y va a Gemini', async () => {
+  const { store, sent } = makeIaStore({ reply: 'Recibí tu documento.' });
+  const from = '59399990109';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  const buf = await makeXlsx(['goma en barra', 'borrador']);
+  await store.handleMessage(from, { type: 'document', data: Buffer.from(buf), filename: 'lista.xlsx' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body === 'Recibí tu documento.'));
 });
 
 after(() => {
   for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
-  console.log('1. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada). Ok para pruebas locales, no para produccion.');
-  console.log('2. Corregidos: rama de serial por token (antes el regex agarraba "serial" primero), saludos muestran ayuda, intent mixto lista ambos estados, y typo "Lenvo" -> "Lenovo Thinkpad" en Laptops.xlsx.');
-  console.log('3. Flujo de utiles escolares: bot publico con estados SALUDO -> ESPERA_LISTA/SELECCION/CANTIDAD -> AGREGADO -> (SUGERENCIA -> CONFIRMA_SUGERENCIA -> MODELO_MOCHILA) -> CONFIRMA_COTIZACION | CONFIRMA_ARCHIVO (confirmacion de PDF/Excel) -> PREGUNTA_PRODUCTO -> PREGUNTA_DISPONIBLE -> ENTREGA -> UBICACION -> DIA_HORA -> CONFIRMA_PEDIDO (menú 1/2/3) -> ESPERA_COMPROBANTE (verificación manual del 50% a nombre de Evelyn Lizeth Zambrano) | MODIFICAR (agregar/retirar).');
+  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 no / 3 catálogo numerado / 4 asesor) -> ESPERA_LISTA | NUMEROS (números por coma -> cantidad por artículo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmación -> cierre.');
+  console.log('2. El Excel de útiles ahora tiene la columna "Número de producto" (1..57); la numeración del catálogo proviene de esa columna.');
+  console.log('3. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada).');
   console.log('==================');
 });

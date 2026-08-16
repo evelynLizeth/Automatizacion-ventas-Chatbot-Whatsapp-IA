@@ -4,7 +4,8 @@ import express from 'express';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized } from './lib/excel.js';
 import { generateReply, HELP, DEACTIVATION_REPLY, isActivationMessage, isDeactivationMessage } from './lib/search.js';
 import { getUtilesProducts, getUtilesSheet } from './lib/utiles.js';
-import { createUtilesStore } from './lib/store.js';
+import { createUtilesStore, ESPERA_GENERANDO } from './lib/store.js';
+import { isAiEnabled } from './lib/ai.js';
 
 const app = express();
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf.toString('utf8'); } }));
@@ -209,7 +210,15 @@ async function downloadMedia(msg) {
 
 async function normalizeInbound(msg) {
   if (msg.type === 'image') {
-    return { type: 'image', businessFrom: msg.businessFrom };
+    let data = null;
+    if (isAiEnabled()) {
+      try {
+        data = await downloadMedia(msg);
+      } catch (err) {
+        console.error('[webhook] no se pudo descargar la imagen', err);
+      }
+    }
+    return { type: 'image', data, mimeType: msg.mimeType || 'image/jpeg', filename: msg.filename || 'foto.jpg', businessFrom: msg.businessFrom };
   }
   if (msg.type === 'document') {
     let data = null;
@@ -335,6 +344,10 @@ app.post('/webhook', async (req, res) => {
         }
 
         const normalized = await normalizeInbound(msg);
+        if (utilesStore.isBusy(msg.from)) {
+          await sendWhatsApp(msg.from, ESPERA_GENERANDO, msg.businessFrom);
+          return;
+        }
         await utilesStore.handleMessage(msg.from, normalized);
       } catch (err) {
         console.error('[webhook] error', err);
