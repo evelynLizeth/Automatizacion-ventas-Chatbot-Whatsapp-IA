@@ -1034,6 +1034,37 @@ test('útiles IA — el prompt incluye la regla de la cuenta de transferencia', 
   assert.ok(last.system.includes('número de cuenta'), 'debería hablar del número de cuenta');
 });
 
+test('útiles IA — el prompt explica la política del 50% si quiere pagar todo al retirar', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'ok' });
+  const from = '59399990125';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '¿puedo pagar todo al retirar?' });
+  assert.ok(last.system.includes('políticas de seguridad'), 'debe mencionar las políticas de seguridad');
+  assert.ok(last.system.includes('pago del 50% para confirmar el pedido'), 'debe pedir el 50% para confirmar');
+});
+
+test('útiles — si pide pagar todo al retirar, explica amablemente la política del 50%', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990126';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '¿puedo pagar todo cuando lo retire?' });
+  const lastMsg = sent.filter((m) => m.body).pop();
+  assert.ok(lastMsg.body.includes('políticas de seguridad'), 'debe explicar la política de seguridad');
+  assert.ok(lastMsg.body.includes('50%'), 'debe pedir el anticipo del 50%');
+});
+
+test('útiles — la pregunta de pago normal sigue respondiendo las condiciones de pago', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990127';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '¿cómo es el pago?' });
+  const lastMsg = sent.filter((m) => m.body).pop();
+  assert.ok(lastMsg.body.includes('transferencia'), 'debe hablar de la transferencia');
+});
+
 test('útiles IA — enviar_cotizacion envía la imagen y sigue en IA_CHAT', async () => {
   const { store, sent } = makeIaStore({
     reply: 'Claro, aquí está tu cotización.',
