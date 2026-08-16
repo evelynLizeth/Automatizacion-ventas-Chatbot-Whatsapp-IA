@@ -919,9 +919,68 @@ test('útiles IA — comprobante inválido con IA: avisa el detalle y sigue espe
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
-  assert.ok(sent.some((m) => m.body && m.body.includes('Revisamos tu comprobante')), 'debe avisar el detalle');
+  assert.ok(sent.some((m) => m.body && m.body.includes('encontramos un detalle')), 'debe avisar el detalle con amabilidad');
   assert.ok(sent.some((m) => m.body && m.body.includes('el monto es menor al anticipo esperado')), 'debe incluir el motivo');
   assert.equal(store.getState(from), 'ESPERA_COMPROBANTE', 'debe seguir esperando el comprobante');
+});
+
+test('útiles IA — si la imagen no es un comprobante lo avisa y sigue esperando', async () => {
+  const { store, sent } = makeIaReceiptStore(
+    {
+      reply: 'ok',
+      carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+      pedido_finalizado: true,
+    },
+    { es_comprobante: false, monto: 0, titular: '', ok: false, motivo: 'esa imagen no parece ser un comprobante de pago' }
+  );
+  const from = '59399990128';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'foto.png' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('no parece ser un comprobante')), 'debe indicar que no es un comprobante');
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE', 'debe seguir esperando el comprobante');
+});
+
+test('útiles IA — no repite el mismo aviso si reenvía el mismo comprobante', async () => {
+  const { store, sent } = makeIaReceiptStore(
+    {
+      reply: 'ok',
+      carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+      pedido_finalizado: true,
+    },
+    { ok: false, monto: 0.5, titular: 'Juan Pérez', motivo: 'el titular no coincide' }
+  );
+  const from = '59399990129';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  const img = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  await store.handleMessage(from, { type: 'image', data: img, mimeType: 'image/png', filename: 'comprobante.png' });
+  await store.handleMessage(from, { type: 'image', data: img, mimeType: 'image/png', filename: 'comprobante.png' });
+  const bodies = sent.filter((m) => m.body).map((m) => m.body);
+  assert.equal(bodies.filter((b) => b.includes('encontramos un detalle')).length, 1, 'el aviso del detalle debe enviarse solo la primera vez');
+  assert.ok(bodies.some((b) => b.includes('misma imagen')), 'debe indicar que es la misma imagen');
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE', 'debe seguir esperando');
+});
+
+test('útiles IA — varía la respuesta en comprobantes inválidos y ofrece asesor', async () => {
+  const { store, sent } = makeIaReceiptStore(
+    {
+      reply: 'ok',
+      carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
+      pedido_finalizado: true,
+    },
+    { ok: false, monto: 0.5, titular: 'Juan Pérez', motivo: 'el titular no coincide' }
+  );
+  const from = '59399990130';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), mimeType: 'image/png' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 2]), mimeType: 'image/png' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 3]), mimeType: 'image/png' });
+  const bodies = sent.filter((m) => m.body).map((m) => m.body);
+  const receiptBodies = bodies.slice(-3);
+  assert.equal(new Set(receiptBodies).size, receiptBodies.length, 'las respuestas deben variar, no repetirse');
+  assert.ok(receiptBodies[2].includes('asesor'), 'al tercer intento debe ofrecer ayuda de un asesor');
 });
 
 test('útiles IA — fallo de Gemini al revisar comprobante cae a verificación manual', async () => {
