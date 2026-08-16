@@ -443,6 +443,28 @@ function makeIaStore(reply) {
   });
 }
 
+function makeIaCaptureStore(reply) {
+  const sent = [];
+  const last = { system: null, history: null };
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: () => {},
+    ai: {
+      isAiEnabled: () => true,
+      buildCatalogContext,
+      askGemini: async (system, history) => {
+        last.system = system;
+        last.history = history;
+        return reply;
+      },
+    },
+  });
+  stores.push(store);
+  return { store, sent, last };
+}
+
 test('útiles — saludo inicial muestra las 4 opciones', async () => {
   const { store, sent } = makeStore();
   await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
@@ -893,6 +915,69 @@ test('útiles IA — documento se parsea y va a Gemini', async () => {
   await store.handleMessage(from, { type: 'document', data: Buffer.from(buf), filename: 'lista.xlsx' });
   assert.equal(store.getState(from), 'IA_CHAT');
   assert.ok(sent.some((m) => m.body === 'Recibí tu documento.'));
+});
+
+test('útiles IA — el prompt incluye la regla de fotos con el enlace del catálogo', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'ok' });
+  const from = '59399990110';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '¿tienes foto de la goma?' });
+  assert.ok(last.system.includes('wa.me/c/593987695938'), 'debería tener el enlace del catálogo');
+  assert.ok(last.system.includes('no hay foto disponible'), 'debería decir que no hay foto');
+  assert.ok(last.system.includes('mochilas, cartucheras y loncheras'), 'debería aclarar las categorías con fotos');
+});
+
+test('útiles IA — el prompt incluye la regla de cotización', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'ok' });
+  const from = '59399990111';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'dame la cotización' });
+  assert.ok(last.system.includes('enviar_cotizacion'), 'debería mencionar enviar_cotizacion');
+  assert.ok(last.system.includes('la cotización'), 'debería mencionar la cotización');
+});
+
+test('útiles IA — el prompt incluye la regla de la cuenta de transferencia', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'ok' });
+  const from = '59399990112';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '¿a qué cuenta transfiero?' });
+  assert.ok(last.system.includes('En breve te indico el número de cuenta'), 'debería responder sin número de cuenta');
+  assert.ok(last.system.includes('número de cuenta'), 'debería hablar del número de cuenta');
+});
+
+test('útiles IA — enviar_cotizacion envía la imagen y sigue en IA_CHAT', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Claro, aquí está tu cotización.',
+    carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: '1 goma en barra' }],
+    enviar_cotizacion: true,
+  });
+  const from = '59399990113';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'dame la cotización' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body === 'Claro, aquí está tu cotización.'));
+  assert.ok(sent.some((m) => m.image), 'debería enviar la imagen de cotización');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].linea, '1 goma en barra');
+});
+
+test('útiles IA — documento .docx sin parser se envía como inlineData', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'Leí tu documento Word.' });
+  const from = '59399990114';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'document', data: Buffer.from('no soy un xlsx ni pdf'), filename: 'lista.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  const userPart = last.history.find((h) => h.role === 'user');
+  const parts = userPart && userPart.parts ? userPart.parts : [];
+  const inline = parts.find((p) => p.inlineData);
+  assert.ok(inline, 'el documento debe ir como inlineData a Gemini');
+  assert.ok(inline.inlineData.mimeType.includes('wordprocessingml.document'));
 });
 
 after(() => {

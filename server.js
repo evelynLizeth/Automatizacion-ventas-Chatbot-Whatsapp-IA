@@ -227,7 +227,7 @@ async function normalizeInbound(msg) {
     } catch (err) {
       console.error('[webhook] no se pudo descargar el archivo', err);
     }
-    return { type: 'document', data, filename: msg.filename || 'archivo', businessFrom: msg.businessFrom };
+    return { type: 'document', data, mimeType: msg.mimeType || '', filename: msg.filename || 'archivo', businessFrom: msg.businessFrom };
   }
   return { type: 'text', text: msg.text?.body ?? '', businessFrom: msg.businessFrom };
 }
