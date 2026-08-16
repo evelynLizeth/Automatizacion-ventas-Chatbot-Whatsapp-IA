@@ -465,13 +465,13 @@ function makeIaCaptureStore(reply) {
   return { store, sent, last };
 }
 
-test('útiles — saludo inicial muestra las 4 opciones', async () => {
+test('útiles — saludo inicial muestra las 3 opciones (sin asesor)', async () => {
   const { store, sent } = makeStore();
   await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
   const body = sent.find((m) => m.body).body;
   assert.ok(body.includes('Sí con asistente IA'));
   assert.ok(body.includes('Deseo ver lo que tienes disponible'));
-  assert.ok(body.includes('que la cotice un asesor'));
+  assert.ok(!body.includes('que la cotice un asesor'), 'la opción 4 ya no debe mostrarse');
   assert.ok(body.includes('goma en barra'));
   assert.equal(store.getState('59399990001'), 'SALUDO');
 });
@@ -523,32 +523,32 @@ test('útiles — números válidos piden cantidad de cada uno y muestran el men
   assert.equal(sel.length, 2);
 });
 
-test('útiles — opción 4 asesor: gracias desactiva', async () => {
+test('útiles — palabra "asesor": gracias desactiva', async () => {
   const { store, sent } = makeStore();
   const from = '59399990034';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '4' });
+  await store.handleMessage(from, { type: 'text', text: 'asesor' });
   assert.equal(store.getState(from), 'ASESOR');
   await store.handleMessage(from, { type: 'text', text: 'gracias' });
   assert.ok(sent[sent.length - 1].body.includes('en cuanto esté lista la cotización'));
   assert.equal(store.getState(from), undefined);
 });
 
-test('útiles — opción 4 asesor: documento cierra la sesión', async () => {
+test('útiles — palabra "asesor": documento cierra la sesión', async () => {
   const { store, sent } = makeStore();
   const from = '59399990035';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '4' });
+  await store.handleMessage(from, { type: 'text', text: 'asesor' });
   await store.handleMessage(from, { type: 'document', data: Buffer.from('x'), filename: 'lista.pdf' });
   assert.ok(sent[sent.length - 1].body.includes('Un asesor revisará tu documento'));
   assert.equal(store.getState(from), undefined);
 });
 
-test('útiles — opción 4 asesor: otro texto re-pregunta', async () => {
+test('útiles — palabra "asesor": otro texto re-pregunta', async () => {
   const { store, sent } = makeStore();
   const from = '59399990036';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
-  await store.handleMessage(from, { type: 'text', text: '4' });
+  await store.handleMessage(from, { type: 'text', text: 'asesor' });
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   assert.ok(sent[sent.length - 1].body.includes('Por favor sube tu documento'));
   assert.equal(store.getState(from), 'ASESOR');
@@ -884,7 +884,7 @@ test('útiles IA — fallo de Gemini no rompe el chat', async () => {
   assert.ok(sent.some((m) => m.body.includes('no pude procesar')));
 });
 
-test('útiles IA — opción 3 (catálogo) y 4 (asesor) siguen en reglas', async () => {
+test('útiles IA — opción 3 (catálogo) y palabra "asesor" siguen en reglas', async () => {
   const { store, sent } = makeIaStore({ reply: 'no debería usarse' });
   const from = '59399990106';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
@@ -894,7 +894,7 @@ test('útiles IA — opción 3 (catálogo) y 4 (asesor) siguen en reglas', async
 
   const from2 = '59399990107';
   await store.handleMessage(from2, { type: 'text', text: 'hola' });
-  await store.handleMessage(from2, { type: 'text', text: '4' });
+  await store.handleMessage(from2, { type: 'text', text: 'asesor' });
   assert.equal(store.getState(from2), 'ASESOR');
 });
 
@@ -980,10 +980,32 @@ test('útiles IA — documento .docx sin parser se envía como inlineData', asyn
   assert.ok(inline.inlineData.mimeType.includes('wordprocessingml.document'));
 });
 
+test('útiles IA — al recibir una lista marca recibir_lista y envía la cotización', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Encontré tus útiles. ¿Deseas agregar algo más a la cotización? También te recomiendo una mochila.',
+    carrito: [
+      { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
+      { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990115';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra, regla de 30 cm' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body.includes('¿Deseas agregar algo más')), 'debe preguntar si desea agregar más');
+  assert.ok(sent.some((m) => m.image), 'debe enviar la imagen de cotización');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 2);
+  assert.equal(sel[0].linea, '2 goma en barra');
+  assert.equal(sel[0].qty, 2);
+});
+
 after(() => {
   for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
-  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 no / 3 catálogo numerado / 4 asesor) -> ESPERA_LISTA | NUMEROS (números por coma -> cantidad por artículo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmación -> cierre.');
+  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 no / 3 catálogo numerado; sin opción 4, "asesor" por palabra) -> ESPERA_LISTA | NUMEROS (números por coma -> cantidad por artículo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmación -> cierre. La imagen de cotización tiene columnas Cantidad | Producto | Precio.');
   console.log('2. El Excel de útiles ahora tiene la columna "Número de producto" (1..57); la numeración del catálogo proviene de esa columna.');
   console.log('3. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada).');
   console.log('==================');
