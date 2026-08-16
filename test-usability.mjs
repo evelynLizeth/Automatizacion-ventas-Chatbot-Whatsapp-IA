@@ -1052,6 +1052,43 @@ test('útiles IA — enviar_cotizacion envía la imagen y sigue en IA_CHAT', asy
   assert.equal(sel[0].linea, '1 goma en barra');
 });
 
+test('útiles IA — no repite la imagen de cotización si el pedido no cambió', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Aquí está tu cotización.',
+    carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: '1 goma en barra' }],
+    enviar_cotizacion: true,
+  });
+  const from = '59399990123';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'dame la cotización' });
+  await store.handleMessage(from, { type: 'text', text: 'otra vez la cotización' });
+  await store.handleMessage(from, { type: 'text', text: 'repite la cotización' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  const images = sent.filter((m) => m.image);
+  assert.equal(images.length, 1, 'no debe reenviar la misma cotización sin cambios');
+});
+
+test('útiles IA — no repite el catálogo ni las fotos ya enviadas', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'utiles-img-'));
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex');
+  writeFileSync(path.join(dir, '1.png'), png);
+  process.env.UTILES_IMAGES_DIR = dir;
+  try {
+    const { store, sent } = makeIaStore({ reply: 'ok', enviar_catalogo: true, enviar_foto: [1] });
+    const from = '59399990124';
+    await store.handleMessage(from, { type: 'text', text: 'hola' });
+    await store.handleMessage(from, { type: 'text', text: '1' });
+    await store.handleMessage(from, { type: 'text', text: 'muéstrame todo y la mochila' });
+    await store.handleMessage(from, { type: 'text', text: 'repite el catálogo y la foto' });
+    const images = sent.filter((m) => m.image);
+    assert.equal(images.length, 2, 'catálogo + foto solo la primera vez (1 cada uno)');
+  } finally {
+    delete process.env.UTILES_IMAGES_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('útiles IA — documento .docx sin parser se envía como inlineData', async () => {
   const { store, last } = makeIaCaptureStore({ reply: 'Leí tu documento Word.' });
   const from = '59399990114';
