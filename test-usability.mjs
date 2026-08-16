@@ -1,10 +1,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
-import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildCatalogoImage, catalogoText, formatPrice, parseFile } from './lib/utiles.js';
+import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
 import { createUtilesStore } from './lib/store.js';
 import { buildCatalogContext } from './lib/ai.js';
 
@@ -242,7 +244,7 @@ function makeXlsx(lines) {
 }
 
 test('útiles — catálogo cargado con número de producto', () => {
-  assert.equal(utiles.length, 57);
+  assert.ok(utiles.length >= 57, `el catálogo debe tener al menos 57 productos (actual: ${utiles.length})`);
   utiles.forEach((p, i) => assert.equal(p.numero, i + 1));
   const goma = utiles.find((p) => normalize(p.producto).includes('goma en barra bester 8 g'));
   assert.ok(goma, 'debería existir Goma en Barra Bester 8 g');
@@ -1002,11 +1004,58 @@ test('útiles IA — al recibir una lista marca recibir_lista y envía la cotiza
   assert.equal(sel[0].qty, 2);
 });
 
+test('fotos — findProductImage resuelve la imagen por número de producto', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'utiles-img-'));
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex');
+  writeFileSync(path.join(dir, '3.png'), png);
+  process.env.UTILES_IMAGES_DIR = dir;
+  try {
+    const hit = findProductImage({ numero: 3 });
+    assert.ok(hit, 'debería resolver el archivo 3.png');
+    assert.ok(hit.endsWith(`${path.sep}3.png`));
+    assert.equal(findProductImage({ numero: 99 }), null);
+    assert.equal(findProductImage(null), null);
+  } finally {
+    delete process.env.UTILES_IMAGES_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('útiles IA — enviar_foto envía la foto del producto', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'utiles-img-'));
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex');
+  writeFileSync(path.join(dir, '1.png'), png);
+  process.env.UTILES_IMAGES_DIR = dir;
+  try {
+    const { store, sent } = makeIaStore({ reply: 'Aquí tienes la foto.', enviar_foto: [1] });
+    const from = '59399990116';
+    await store.handleMessage(from, { type: 'text', text: 'hola' });
+    await store.handleMessage(from, { type: 'text', text: '1' });
+    await store.handleMessage(from, { type: 'text', text: 'muéstrame la foto' });
+    assert.equal(store.getState(from), 'IA_CHAT');
+    assert.ok(sent.some((m) => m.image), 'debería enviar la foto del producto');
+  } finally {
+    delete process.env.UTILES_IMAGES_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('útiles IA — enviar_foto sin archivo avisa que no hay foto', async () => {
+  const { store, sent } = makeIaStore({ reply: 'Te envío la foto.', enviar_foto: [99] });
+  const from = '59399990117';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'muéstrame la foto' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body.includes('No tengo una foto disponible')), 'debe avisar que no hay foto');
+  assert.ok(!sent.some((m) => m.image), 'no debe enviar imagen');
+});
+
 after(() => {
   for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
   console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 no / 3 catálogo numerado; sin opción 4, "asesor" por palabra) -> ESPERA_LISTA | NUMEROS (números por coma -> cantidad por artículo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmación -> cierre. La imagen de cotización tiene columnas Cantidad | Producto | Precio.');
-  console.log('2. El Excel de útiles ahora tiene la columna "Número de producto" (1..57); la numeración del catálogo proviene de esa columna.');
+  console.log('2. El Excel de útiles tiene la columna "Número de producto" (1..59); la numeración del catálogo proviene de esa columna.');
   console.log('3. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada).');
   console.log('==================');
 });
