@@ -485,6 +485,17 @@ function makeIaReceiptStore(reply, receiptReply) {
   return { store, sent };
 }
 
+function makeSimilarStore(similarReply) {
+  return makeStore({
+    ai: {
+      isAiEnabled: () => true,
+      buildCatalogContext,
+      askGemini: async () => ({}),
+      askGeminiSimilar: async () => similarReply,
+    },
+  });
+}
+
 function hoy() {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Guayaquil',
@@ -658,7 +669,7 @@ test('útiles — el catálogo se carga en memoria solo al entrar al flujo (opci
   assert.equal(calls, 1, 'la opción 1 carga el catálogo una vez');
   await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
   assert.equal(calls, 1, 'el catálogo ya está en memoria, no se recarga');
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  assert.equal(store.getState(from), 'AGREGADO');
 });
 
 test('útiles — la opción 2 (Evelyn) y la palabra "asesor" no cargan el catálogo', async () => {
@@ -807,7 +818,6 @@ test('útiles — eliminar un producto del pedido', async () => {
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
-  await store.handleMessage(from, { type: 'text', text: '2' });
   assert.equal(store.getState(from), 'AGREGADO');
   await store.handleMessage(from, { type: 'text', text: '2' });
   assert.ok(sent[sent.length - 1].body.includes('Tu pedido actual'));
@@ -924,15 +934,21 @@ test('útiles — abandonar el pedido de entrega cierra la sesión', async () =>
   assert.equal(store.getState(from), undefined);
 });
 
-test('útiles — lista por texto genera imagen y pide confirmar', async () => {
+test('útiles — lista por texto se procesa por ítem y difiere la cotización', async () => {
   const { store, sent } = makeStore();
   const from = '59399990002';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '1' });
   assert.equal(store.getState(from), 'ESPERA_LISTA');
   await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador\nxyzfoo' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  assert.ok(!sent.some((m) => m.image), 'no debe mostrar la cotización aún');
+  assert.ok(sent[sent.length - 1].body.includes('agregar algo más'));
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
   const img = sent.find((m) => m.image);
-  assert.ok(img, 'debería enviar imagen');
+  assert.ok(img, 'debería enviar la cotización al final');
   assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
   assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
 });
@@ -958,7 +974,7 @@ test('útiles — documento pide confirmación antes de generar', async () => {
   assert.equal(store.getState(from), 'CONFIRMA_ARCHIVO');
 });
 
-test('útiles — confirmar "sí" al documento genera la cotización', async () => {
+test('útiles — confirmar "sí" al documento procesa la lista por ítem', async () => {
   const { store, sent } = makeStore();
   const from = '59399990022';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
@@ -967,8 +983,13 @@ test('útiles — confirmar "sí" al documento genera la cotización', async () 
   await store.handleMessage(from, { type: 'document', data: buf, filename: 'lista.xlsx' });
   await store.handleMessage(from, { type: 'text', text: 'sí' });
   assert.ok(sent.some((m) => m.body && m.body.includes('armando tu cotización')));
+  assert.equal(store.getState(from), 'AGREGADO');
+  assert.ok(!sent.some((m) => m.image), 'no debe mostrar la cotización aún');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
   const img = sent.find((m) => m.image);
-  assert.ok(img, 'debería enviar imagen');
+  assert.ok(img, 'debería enviar la cotización al final');
   assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
   assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
 });
@@ -986,7 +1007,7 @@ test('útiles — isBusy true mientras genera la cotización del archivo', async
   assert.equal(store.isBusy(from), true);
   await p;
   assert.equal(store.isBusy(from), false);
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  assert.equal(store.getState(from), 'AGREGADO');
 });
 
 test('útiles — "no" al documento: pregunta producto, luego catálogo disponible', async () => {
@@ -1019,19 +1040,121 @@ test('útiles — lista solo con cabeceras responde que no encontró', async () 
   assert.equal(store.getState(from), 'ESPERA_LISTA');
 });
 
-test('útiles — lista con cabeceras + productos cotiza solo los productos', async () => {
+test('útiles — lista con cabeceras + productos procesa solo los productos', async () => {
   const { store, sent } = makeStore();
   const from = '59399990024';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'Unidad Educativa San José\nGrado: 5to\ngoma en barra\nborrador' });
-  const img = sent.find((m) => m.image);
-  assert.ok(img, 'debería enviar imagen');
-  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  assert.equal(store.getState(from), 'AGREGADO');
+  assert.ok(!sent.some((m) => m.image), 'no debe mostrar la cotización aún');
   const sel = store.getSeleccion(from);
   assert.ok(sel.some((it) => it.nombre === 'goma en barra'));
   assert.ok(sel.some((it) => it.nombre === 'borrador'));
   assert.equal(sel.length, 2);
+});
+
+test('útiles — ítem de lista sin coincidencia exacta ofrece opciones y continúa', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990060';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\ncuaderno universitario 60 hojas a cuadros' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Para "cuaderno universitario 60 hojas a cuadros" encontré varias opciones')));
+  assert.equal(store.getState(from), 'RESOLVER_LISTA');
+  const sel0 = store.getSeleccion(from);
+  assert.ok(sel0.some((it) => it.nombre === 'goma en barra'));
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const sel = store.getSeleccion(from);
+  assert.ok(sel.some((it) => it.nombre === 'cuaderno universitario 60 hojas a cuadros'));
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles — ítem de lista sin ningún producto disponible dice no disponemos', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990061';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nescoba' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('No disponemos de "escoba"')));
+  assert.equal(store.getState(from), 'AGREGADO');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].nombre, 'goma en barra');
+});
+
+test('útiles IA — lista con ítem inexacto: la IA propone un similar y se agrega al confirmar', async () => {
+  const { store, sent } = makeSimilarStore({
+    disponible: true,
+    propuesto: 12,
+    motivo: 'Tenemos el cuaderno universitario de 100 hojas a cuadros.',
+  });
+  const from = '59399990062';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'catálogo' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\ncuaderno universitario 60 hojas a cuadros' });
+  assert.ok(sent[sent.length - 1].body.includes('¿Te sirve Cuaderno universitario cuadros 100 hojas'));
+  assert.equal(store.getState(from), 'RESOLVER_LISTA');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  const sel = store.getSeleccion(from);
+  assert.ok(sel.some((it) => it.nombre === 'cuaderno universitario 60 hojas a cuadros'));
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles IA — la IA indica que no hay producto que cumpla el objetivo', async () => {
+  const { store, sent } = makeSimilarStore({
+    disponible: false,
+    propuesto: 0,
+    motivo: 'No contamos con ese producto en este momento.',
+  });
+  const from = '59399990063';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'catálogo' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\ncuaderno universitario 60 hojas a cuadros' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('No disponemos de "cuaderno universitario 60 hojas a cuadros"')));
+  assert.equal(store.getState(from), 'AGREGADO');
+  const sel = store.getSeleccion(from);
+  assert.ok(!sel.some((it) => it.nombre.includes('cuaderno')));
+});
+
+test('útiles IA — consulta directa sin resultados: la IA propone similar y se puede rechazar', async () => {
+  const { store, sent } = makeSimilarStore({
+    disponible: true,
+    propuesto: 12,
+    motivo: 'Es el cuaderno universitario de 100 hojas.',
+  });
+  const from = '59399990064';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'catálogo' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: 'computadora portatil' });
+  assert.ok(sent[sent.length - 1].body.includes('¿Te sirve Cuaderno universitario cuadros 100 hojas'));
+  assert.equal(store.getState(from), 'RESOLVER_LISTA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('No disponemos de "computadora portatil"')));
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles IA — propuesta de la IA con número inválido no se cotiza', async () => {
+  const { store, sent } = makeSimilarStore({
+    disponible: true,
+    propuesto: 999,
+    motivo: 'Es el más parecido.',
+  });
+  const from = '59399990065';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'catálogo' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: 'computadora portatil' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('No disponemos de "computadora portatil"')));
+  assert.equal(store.getState(from), 'AGREGADO');
 });
 
 test('útiles IA — opción 1 entra al chat con IA', async () => {
