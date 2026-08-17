@@ -639,8 +639,8 @@ test('útiles — números válidos piden cantidad de cada uno y muestran el men
   assert.equal(store.getState(from), 'CANTIDAD');
   await store.handleMessage(from, { type: 'text', text: '3' });
   const last = sent[sent.length - 1].body;
-  assert.ok(last.includes('Eliminar productos'));
-  assert.ok(last.includes('Finalizar pedido'));
+  assert.ok(last.includes('agregar algo más'));
+  assert.ok(last.includes('eliminar algún producto'));
   assert.equal(store.getState(from), 'AGREGADO');
   const sel = store.getSeleccion(from);
   assert.equal(sel.length, 2);
@@ -685,7 +685,7 @@ test('útiles — producto único: "no" va al menú agregar/eliminar', async () 
   assert.ok(sent[sent.length - 1].body.includes('única opción'));
   assert.equal(store.getState(from), 'UNICO');
   await store.handleMessage(from, { type: 'text', text: 'no' });
-  assert.ok(sent[sent.length - 1].body.includes('Eliminar productos'));
+  assert.ok(sent[sent.length - 1].body.includes('agregar algo más'));
   assert.equal(store.getState(from), 'AGREGADO');
 });
 
@@ -711,7 +711,7 @@ test('útiles — varias opciones incluyen "Ninguna" y llevan al menú', async (
   assert.ok(sent[sent.length - 1].body.includes('Ninguna'));
   assert.equal(store.getState(from), 'SELECCION');
   await store.handleMessage(from, { type: 'text', text: 'ninguna' });
-  assert.ok(sent[sent.length - 1].body.includes('Eliminar productos'));
+  assert.ok(sent[sent.length - 1].body.includes('agregar algo más'));
   assert.equal(store.getState(from), 'AGREGADO');
 });
 
@@ -728,7 +728,7 @@ test('útiles — eliminar un producto del pedido', async () => {
   assert.equal(store.getState(from), 'ELIMINAR');
   const count0 = store.getSeleccion(from).length;
   await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.ok(sent[sent.length - 1].body.includes('Eliminar productos'));
+  assert.ok(sent[sent.length - 1].body.includes('eliminé'));
   assert.equal(store.getSeleccion(from).length, count0 - 1);
   assert.equal(store.getState(from), 'AGREGADO');
 });
@@ -1393,6 +1393,81 @@ test('útiles IA — enviar_foto sin archivo avisa que no hay foto', async () =>
   assert.equal(store.getState(from), 'IA_CHAT');
   assert.ok(sent.some((m) => m.body.includes('No tengo una foto disponible')), 'debe avisar que no hay foto');
   assert.ok(!sent.some((m) => m.image), 'no debe enviar imagen');
+});
+
+test('útiles — sugerencia: "muéstrame las mochilas" muestra los modelos', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990140';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'muéstrame las mochilas' });
+  assert.equal(store.getState(from), 'CONFIRMA_SUGERENCIA');
+  assert.ok(sent[sent.length - 1].body.includes('Te gustaría agregar'));
+});
+
+test('útiles — sugerencia: "prefiero ver mi cotización" muestra la cotización', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990141';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'prefiero ver mi cotización' });
+  assert.ok(sent.some((m) => m.image));
+  assert.ok(sent[sent.length - 1].body.includes('Estás de acuerdo'));
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — confirmar sugerencia: responder un producto va al catálogo de modelos', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990142';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'CONFIRMA_SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'xyzfoo' });
+  assert.equal(store.getState(from), 'SELECCION');
+  await store.handleMessage(from, { type: 'text', text: 'ninguna' });
+  assert.equal(store.getState(from), 'AGREGADO');
+});
+
+test('útiles — "domicilio" en entrega pide dirección', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990143';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'caja de 12 lapices' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'niña' });
+  assert.equal(store.getState(from), 'ENTREGA');
+  await store.handleMessage(from, { type: 'text', text: 'domicilio' });
+  assert.equal(store.getState(from), 'UBICACION');
+});
+
+test('útiles — respuesta no reconocida en confirmar cotización permite modificar', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990144';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '22' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  await store.handleMessage(from, { type: 'text', text: 'otro producto' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  assert.ok(sent[sent.length - 1].body.includes('agregar algo más'));
 });
 
 after(() => {

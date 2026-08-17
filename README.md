@@ -98,7 +98,8 @@ Consultas dentro de una sesión:
 
 Cualquier persona que escriba al número recibe el flujo de útiles:
 
-- El primer mensaje responde con un saludo: `1. Sí, quiero enviar mi lista` / `2. No`.
+- El primer mensaje responde con un saludo: `1. Realizar una cotización de útiles escolares` / `2. Comunicarme con Evelyn` / `3. Ver los útiles escolares que tienes disponibles`.
+- El resto del flujo habla de forma natural (sin menús `1. Sí / 2. No`): se responde con "sí", "no", "domicilio", "retiro", el nombre de un producto, etc.
 - Con `1` o `sí`, el bot pide la lista: puede escribirla por mensaje (un producto por línea) o adjuntarla en **PDF o Excel**.
 - Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen con la cotización** (precio por ítem y total) y pregunta si desea realizar el pedido.
 - También se puede preguntar por un producto directo (ej. `goma en barra`): muestra el precio y pide la cantidad; al final se arma la cotización.
