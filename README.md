@@ -105,7 +105,8 @@ Cualquier persona que escriba al número recibe el flujo de útiles:
 - Las **fotos no se leen** (sin OCR): se pide escribir la lista o adjuntarla en PDF/Excel.
 - Preguntas sobre `pago`/`transferencia` responden las condiciones de pago (mitad al confirmar, mitad al entregar).
 - Si el pedido se confirma, se pregunta por entrega a domicilio (con recargo) y luego la dirección y horario.
-- El chat se cierra por inactividad tras ~10 minutos (con avisos a los 5 y 7 minutos).
+- El chat se cierra por inactividad a los 14 minutos (aviso "¿Sigues ahí?" a los 5 min, y "El chat se cerrará por falta de respuesta." al cierre). Si la venta ya se concretó (comprobante enviado o retiro agendado) no se envían avisos.
+- El catálogo (Excel) se carga en memoria solo cuando se necesita (al entrar al flujo con la opción 1, ver el catálogo o consultar un producto); el saludo y la opción 2 no lo cargan.
 
 ## Archivos
 

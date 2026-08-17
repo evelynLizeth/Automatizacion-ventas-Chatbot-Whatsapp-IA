@@ -489,9 +489,9 @@ test('útiles — saludo inicial muestra las 3 opciones (sin asesor)', async () 
   const { store, sent } = makeStore();
   await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
   const body = sent.find((m) => m.body).body;
-  assert.ok(body.includes('Deseo realizar una cotizacion de utiles escolares'));
-  assert.ok(body.includes('Deseo comunicarme con Evelyn'));
-  assert.ok(body.includes('Deseo ver los utiles escolares que tienes disponible'));
+  assert.ok(body.includes('Realizar una cotización de útiles escolares'));
+  assert.ok(body.includes('Comunicarme con Evelyn'));
+  assert.ok(body.includes('Ver los útiles escolares que tienes disponibles'));
   assert.ok(!body.includes('que la cotice un asesor'), 'la opción 4 ya no debe mostrarse');
   assert.equal(store.getState('59399990001'), 'SALUDO');
 });
@@ -553,6 +553,46 @@ test('útiles — "quién es Evelyn" NO pasa el chat a Evelyn (sigue en saludo)'
   await store.handleMessage(from, { type: 'text', text: 'quién es Evelyn' });
   assert.equal(store.getState(from), 'SALUDO', 'no debe activarse el modo silencio');
   assert.ok(!sent.some((m) => m.body && m.body.includes('Evelyn chateará contigo')));
+});
+
+test('útiles — el catálogo se carga en memoria solo al entrar al flujo (opción 1)', async () => {
+  let calls = 0;
+  const sent = [];
+  const store = createUtilesStore({
+    getProducts: async () => { calls += 1; return utiles; },
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async () => {},
+    log: () => {},
+  });
+  stores.push(store);
+  const from = '59399990054';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  assert.equal(calls, 0, 'el saludo no debe cargar el catálogo');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(calls, 1, 'la opción 1 carga el catálogo una vez');
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  assert.equal(calls, 1, 'el catálogo ya está en memoria, no se recarga');
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+});
+
+test('útiles — la opción 2 (Evelyn) y la palabra "asesor" no cargan el catálogo', async () => {
+  let calls = 0;
+  const store = createUtilesStore({
+    getProducts: async () => { calls += 1; return utiles; },
+    sendText: async () => {},
+    sendImage: async () => {},
+    log: () => {},
+  });
+  stores.push(store);
+  await store.handleMessage('59399990055', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990055', { type: 'text', text: '2' });
+  assert.equal(calls, 0, 'la opción 2 no debe cargar el catálogo');
+  assert.equal(store.getState('59399990055'), 'DESACTIVADO');
+
+  await store.handleMessage('59399990056', { type: 'text', text: 'hola' });
+  await store.handleMessage('59399990056', { type: 'text', text: 'asesor' });
+  assert.equal(calls, 0, 'la palabra asesor no debe cargar el catálogo');
+  assert.equal(store.getState('59399990056'), 'ASESOR');
 });
 
 test('útiles IA — "necesito comunicarme con Evelyn" también pasa el chat a Evelyn', async () => {
