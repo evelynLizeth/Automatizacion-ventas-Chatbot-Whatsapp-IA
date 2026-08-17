@@ -496,12 +496,32 @@ test('útiles — saludo inicial muestra las 3 opciones (sin asesor)', async () 
   assert.equal(store.getState('59399990001'), 'SALUDO');
 });
 
-test('útiles — "no" en saludo se despide', async () => {
+test('útiles — "no" en saludo pasa el chat a Evelyn y el bot queda en silencio', async () => {
   const { store, sent } = makeStore();
-  await store.handleMessage('59399990004', { type: 'text', text: 'hola' });
-  await store.handleMessage('59399990004', { type: 'text', text: 'no' });
-  assert.ok(sent.some((m) => m.body.includes('Hasta luego')));
-  assert.equal(store.getState('59399990004'), undefined);
+  const from = '59399990004';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  const last = sent[sent.length - 1].body;
+  assert.ok(last.includes('Evelyn chateará contigo'), 'debe indicar que Evelyn toma la conversación');
+  assert.equal(store.getState(from), 'DESACTIVADO');
+  const count = sent.length;
+  await store.handleMessage(from, { type: 'text', text: 'necesito ayuda' });
+  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+});
+
+test('útiles IA — "no" en saludo también pasa el chat a Evelyn y queda en silencio', async () => {
+  const { store, sent } = makeIaStore({ reply: 'no debería usarse' });
+  const from = '59399990131';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  const last = sent[sent.length - 1].body;
+  assert.ok(last.includes('Evelyn chateará contigo'), 'debe indicar que Evelyn toma la conversación');
+  assert.equal(store.getState(from), 'DESACTIVADO');
+  const count = sent.length;
+  await store.handleMessage(from, { type: 'text', text: 'hola, necesito una mochila' });
+  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
 });
 
 test('útiles — opción 3 envía el catálogo y pide números', async () => {
