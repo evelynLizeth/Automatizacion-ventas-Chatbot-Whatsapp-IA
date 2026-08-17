@@ -489,10 +489,10 @@ test('útiles — saludo inicial muestra las 3 opciones (sin asesor)', async () 
   const { store, sent } = makeStore();
   await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
   const body = sent.find((m) => m.body).body;
-  assert.ok(body.includes('Sí con asistente IA'));
-  assert.ok(body.includes('Deseo ver lo que tienes disponible'));
+  assert.ok(body.includes('Deseo realizar una cotizacion de utiles escolares'));
+  assert.ok(body.includes('Deseo comunicarme con Evelyn'));
+  assert.ok(body.includes('Deseo ver los utiles escolares que tienes disponible'));
   assert.ok(!body.includes('que la cotice un asesor'), 'la opción 4 ya no debe mostrarse');
-  assert.ok(body.includes('goma en barra'));
   assert.equal(store.getState('59399990001'), 'SALUDO');
 });
 
@@ -521,6 +521,49 @@ test('útiles IA — "no" en saludo también pasa el chat a Evelyn y queda en si
   assert.equal(store.getState(from), 'DESACTIVADO');
   const count = sent.length;
   await store.handleMessage(from, { type: 'text', text: 'hola, necesito una mochila' });
+  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+});
+
+test('útiles — "necesito comunicarme con Evelyn" pasa el chat a Evelyn y queda en silencio', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990051';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'Necesito comunicarme con Evelyn' });
+  const last = sent[sent.length - 1].body;
+  assert.ok(last.includes('Evelyn chateará contigo'), 'debe indicar que Evelyn toma la conversación');
+  assert.equal(store.getState(from), 'DESACTIVADO');
+  const count = sent.length;
+  await store.handleMessage(from, { type: 'text', text: 'hola, seguimos?' });
+  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+});
+
+test('útiles — "quiero hablar con Evelyn" también pasa el chat a Evelyn', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990052';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'quiero hablar con Evelyn' });
+  assert.ok(sent[sent.length - 1].body.includes('Evelyn chateará contigo'));
+  assert.equal(store.getState(from), 'DESACTIVADO');
+});
+
+test('útiles — "quién es Evelyn" NO pasa el chat a Evelyn (sigue en saludo)', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990053';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'quién es Evelyn' });
+  assert.equal(store.getState(from), 'SALUDO', 'no debe activarse el modo silencio');
+  assert.ok(!sent.some((m) => m.body && m.body.includes('Evelyn chateará contigo')));
+});
+
+test('útiles IA — "necesito comunicarme con Evelyn" también pasa el chat a Evelyn', async () => {
+  const { store, sent } = makeIaStore({ reply: 'no debería usarse' });
+  const from = '59399990132';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'necesito comunicarme con evelyn' });
+  assert.ok(sent[sent.length - 1].body.includes('Evelyn chateará contigo'));
+  assert.equal(store.getState(from), 'DESACTIVADO');
+  const count = sent.length;
+  await store.handleMessage(from, { type: 'text', text: 'quiero una mochila' });
   assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
 });
 
