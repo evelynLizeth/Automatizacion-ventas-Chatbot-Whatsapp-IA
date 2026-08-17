@@ -98,13 +98,14 @@ Consultas dentro de una sesión:
 
 Cualquier persona que escriba al número recibe el flujo de útiles:
 
-- El primer mensaje responde con un saludo: `1. Realizar una cotización de útiles escolares` / `2. Comunicarme con Evelyn` / `3. Ver los útiles escolares que tienes disponibles`.
+- El primer mensaje responde con un saludo: `1. Realizar una cotización de útiles escolares` / `2. Comunicarme con Evelyn` / `3. Solicitar un Chatbot Inteligente para mi negocio`. El catálogo ya no está en el saludo: se muestra al pedirlo por palabra (ej. "catálogo", "qué tienes") o después de la opción 1 (pregunta "¿Deseas ver lo que tengo disponible?").
+- La opción 3 (o escribir "quiero un chatbot") levanta los **requerimientos de un chatbot** para el negocio del cliente: 8 preguntas, resumen final, aprobación y la opción de corregir campo por campo. Al aprobar, se registran los requerimientos en el log y se indica que un asesor lo contactará personalmente.
 - El resto del flujo habla de forma natural (sin menús `1. Sí / 2. No`): se responde con "sí", "no", "domicilio", "retiro", el nombre de un producto, etc.
 - Con `1` o `sí`, el bot pide la lista: puede escribirla por mensaje (un producto por línea) o adjuntarla en **PDF o Excel**.
 - Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen con la cotización** (precio por ítem y total) y pregunta si desea realizar el pedido.
 - También se puede preguntar por un producto directo (ej. `goma en barra`): muestra el precio y pide la cantidad; al final se arma la cotización.
 - Las **fotos no se leen** (sin OCR): se pide escribir la lista o adjuntarla en PDF/Excel.
-- Preguntas sobre `pago`/`transferencia` responden las condiciones de pago (mitad al confirmar, mitad al entregar).
+- Preguntas sobre `pago`/`transferencia` responden las condiciones de pago indicando el monto exacto del anticipo del 50% (mitad al confirmar, mitad al entregar o retirar). Al enviar el comprobante, el bot verifica (con Gemini vision) que el monto sea ≥ el 50%, que esté a nombre de Evelyn Lizeth Zambrano y que la fecha sea la de hoy.
 - Si el pedido se confirma, se pregunta por entrega a domicilio (con recargo) y luego la dirección y horario.
 - El chat se cierra por inactividad a los 14 minutos (aviso "¿Sigues ahí?" a los 5 min, y "El chat se cerrará por falta de respuesta." al cierre). Si la venta ya se concretó (comprobante enviado o retiro agendado) no se envían avisos.
 - El catálogo (Excel) se carga en memoria solo cuando se necesita (al entrar al flujo con la opción 1, ver el catálogo o consultar un producto); el saludo y la opción 2 no lo cargan.
