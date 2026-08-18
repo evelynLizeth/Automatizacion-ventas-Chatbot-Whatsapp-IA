@@ -1125,8 +1125,12 @@ test('útiles — ítem de lista sin ningún producto disponible dice no dispone
   assert.ok(sent.some((m) => m.body && m.body.includes('No disponemos de "escoba"')));
   assert.equal(store.getState(from), 'AGREGADO');
   const sel = store.getSeleccion(from);
-  assert.equal(sel.length, 1);
+  assert.equal(sel.length, 2);
   assert.equal(sel[0].nombre, 'goma en barra');
+  const escoba = sel.find((it) => it.nombre === 'no disponible');
+  assert.ok(escoba, 'el producto no disponible debe quedar en la selección');
+  assert.equal(escoba.linea, 'escoba');
+  assert.equal(escoba.precio, null);
 });
 
 test('útiles IA — lista con ítem inexacto: la IA propone un similar y se agrega al confirmar', async () => {
@@ -1815,17 +1819,61 @@ test('útiles — los ítems de una lista guardan la línea solicitada y el nomb
 });
 
 test('útiles — buildPriceSvg: 5 columnas con lista y layout normal sin lista', () => {
-  const rows = [{ linea: 'esfero azul', nombre: 'esfero azul borrable', precio: 0.5, qty: 2 }];
+  const rows = [
+    { linea: 'esfero azul', nombre: 'esfero azul borrable', precio: 0.5, qty: 2 },
+    { linea: 'esfero verde', nombre: 'no disponible', precio: null, qty: 1 },
+  ];
   const svgLista = buildPriceSvg(rows, { lista: true });
   assert.ok(svgLista.includes('Descripción solicitada'), 'debe mostrar la columna Descripción solicitada');
   assert.ok(svgLista.includes('Valor unitario'), 'debe mostrar la columna Valor unitario');
   assert.ok(svgLista.includes('Valor total'), 'debe mostrar la columna Valor total');
   assert.ok(svgLista.includes('esfero azul'), 'debe mostrar la descripción solicitada');
   assert.ok(svgLista.includes('esfero azul borrable'), 'debe mostrar el producto del catálogo');
+  assert.ok(svgLista.includes('esfero verde'), 'debe mostrar el texto solicitado del producto no disponible');
+  assert.ok(svgLista.includes('no disponible'), 'debe indicar que el producto no está disponible');
+  assert.ok(svgLista.includes(formatPrice(0)), 'el producto no disponible debe llevar precio 0.00');
   assert.ok(!svgLista.includes('>Precio</text>'), 'el layout de lista no usa la columna Precio');
   const svgNormal = buildPriceSvg(rows, {});
   assert.ok(!svgNormal.includes('Descripción solicitada'), 'el layout normal no usa 5 columnas');
   assert.ok(svgNormal.includes('>Precio</text>'), 'el layout normal mantiene la columna Precio');
+});
+
+test('útiles IA — los productos sin coincidencia del carrito van como no disponible', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    carrito: [
+      { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
+      { producto: 'artefacto marciano 999', cantidad: 1, linea: 'esfero verde' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990124';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nesfero verde' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización rápida');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 2);
+  const nd = sel.find((it) => it.nombre === 'no disponible');
+  assert.ok(nd, 'el producto sin coincidencia debe quedar como no disponible');
+  assert.equal(nd.linea, 'esfero verde');
+  assert.equal(nd.precio, null);
+});
+
+test('útiles IA — la red de seguridad agrega a la cotización los no disponibles que Gemini omite', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+    recibir_lista: true,
+  });
+  const from = '59399990125';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nescoba' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización rápida');
+  const sel = store.getSeleccion(from);
+  const escoba = sel.find((it) => it.nombre === 'no disponible' && it.linea === 'escoba');
+  assert.ok(escoba, 'el ítem no disponible omitido por Gemini debe agregarse desde la lista');
 });
 
 test('fotos — findProductImage resuelve la imagen por número, código o nombre', async () => {
