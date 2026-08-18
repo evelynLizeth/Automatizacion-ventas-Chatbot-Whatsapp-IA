@@ -6,7 +6,7 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
-import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
+import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildPriceSvg, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
 import { createUtilesStore } from './lib/store.js';
 import { buildCatalogContext } from './lib/ai.js';
 
@@ -1712,9 +1712,9 @@ test('útiles IA — documento .docx sin parser se envía como inlineData', asyn
   assert.ok(inline.inlineData.mimeType.includes('wordprocessingml.document'));
 });
 
-test('útiles IA — al recibir una lista marca recibir_lista y envía la cotización', async () => {
+test('útiles IA — al recibir una lista envía la cotización rápida y pregunta aceptar o seleccionar uno por uno', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Encontré tus útiles. ¿Deseas agregar algo más a la cotización? También te recomiendo una mochila.',
+    reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
       { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
@@ -1726,12 +1726,106 @@ test('útiles IA — al recibir una lista marca recibir_lista y envía la cotiza
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'goma en barra, regla de 30 cm' });
   assert.equal(store.getState(from), 'IA_CHAT');
-  assert.ok(sent.some((m) => m.body.includes('¿Deseas agregar algo más')), 'debe preguntar si desea agregar más');
+  assert.ok(sent.some((m) => m.body && m.body.includes('cotización rápida o prefieres seleccionar')), 'debe preguntar si acepta la cotización rápida o prefiere seleccionar uno por uno');
   assert.ok(sent.some((m) => m.image), 'debe enviar la imagen de cotización');
   const sel = store.getSeleccion(from);
   assert.equal(sel.length, 2);
   assert.equal(sel[0].linea, '2 goma en barra');
   assert.equal(sel[0].qty, 2);
+});
+
+test('útiles IA — si acepta la cotización rápida continúa al cierre preguntando niño/niña', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+      recibir_lista: true,
+    },
+    {
+      reply: 'Perfecto. ¿Tu lista de útiles es para niña o para niño?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+    },
+  ]);
+  const from = '59399990120';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización rápida');
+  await store.handleMessage(from, { type: 'text', text: 'de acuerdo' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body && m.body.includes('niña o para niño')), 'debe continuar al cierre preguntando el género');
+});
+
+test('útiles IA — si elige seleccionar uno por uno se pregunta un solo producto por mensaje', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+      carrito: [
+        { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
+        { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
+      ],
+      recibir_lista: true,
+    },
+    {
+      reply: 'Revisé tu lista y tengo varios de esos materiales, pero necesito que me ayudes a elegir las opciones exactas para algunos productos. Para los cuadernos de cuadros, ¿prefieres el "Cuaderno universitario cuadros 100 hojas" ($1.76) o el "Cuaderno pequeño cuadros espiral" ($1.58)?',
+      carrito: [
+        { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
+        { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
+      ],
+    },
+  ]);
+  const from = '59399990121';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra, regla de 30 cm' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización rápida');
+  await store.handleMessage(from, { type: 'text', text: 'uno por uno' });
+  const msgs = sent.filter((m) => m.body).map((m) => m.body);
+  const last = msgs[msgs.length - 1];
+  assert.ok(last.includes('¿prefieres'), 'debe hacer una sola pregunta de opciones');
+  assert.equal((last.match(/\?/g) || []).length, 1, 'debe ser una sola pregunta');
+  assert.ok(!last.includes('juego geométrico'), 'no debe preguntar por otro producto en el mismo mensaje');
+  assert.ok(!last.includes('compás'), 'no debe mencionar productos con una sola opción');
+});
+
+test('útiles IA — el prompt exige una pregunta por mensaje y la cotización final solo al confirmar el cliente', async () => {
+  const { store, last } = makeIaCaptureStore({ reply: 'ok' });
+  const from = '59399990122';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'hola necesito útiles' });
+  assert.ok(last.system.includes('UNA sola pregunta por mensaje'), 'debe exigir una pregunta por mensaje');
+  assert.ok(last.system.includes('UNA SOLA opción'), 'debe agregar directo los productos con una sola opción');
+  assert.ok(last.system.includes('uno por uno'), 'debe preguntar si acepta la cotización rápida o elige uno por uno');
+  assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
+});
+
+test('útiles — los ítems de una lista guardan la línea solicitada y el nombre del catálogo', async () => {
+  const { store } = makeStore();
+  const from = '59399990123';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  const sel = store.getSeleccion(from);
+  const goma = sel.find((it) => it.nombre === 'goma en barra');
+  assert.ok(goma, 'debe existir el ítem con el texto del cliente');
+  assert.equal(goma.linea, 'goma en barra');
+  assert.ok(goma.catalogo && goma.catalogo !== goma.linea, 'debe guardar el nombre del catálogo');
+});
+
+test('útiles — buildPriceSvg: 5 columnas con lista y layout normal sin lista', () => {
+  const rows = [{ linea: 'esfero azul', nombre: 'esfero azul borrable', precio: 0.5, qty: 2 }];
+  const svgLista = buildPriceSvg(rows, { lista: true });
+  assert.ok(svgLista.includes('Descripción solicitada'), 'debe mostrar la columna Descripción solicitada');
+  assert.ok(svgLista.includes('Valor unitario'), 'debe mostrar la columna Valor unitario');
+  assert.ok(svgLista.includes('Valor total'), 'debe mostrar la columna Valor total');
+  assert.ok(svgLista.includes('esfero azul'), 'debe mostrar la descripción solicitada');
+  assert.ok(svgLista.includes('esfero azul borrable'), 'debe mostrar el producto del catálogo');
+  assert.ok(!svgLista.includes('>Precio</text>'), 'el layout de lista no usa la columna Precio');
+  const svgNormal = buildPriceSvg(rows, {});
+  assert.ok(!svgNormal.includes('Descripción solicitada'), 'el layout normal no usa 5 columnas');
+  assert.ok(svgNormal.includes('>Precio</text>'), 'el layout normal mantiene la columna Precio');
 });
 
 test('fotos — findProductImage resuelve la imagen por número, código o nombre', async () => {
@@ -1889,7 +1983,7 @@ test('útiles — respuesta no reconocida en confirmar cotización permite modif
 after(() => {
   for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
-  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 Evelyn / 3 chatbot para tu negocio; sin opcion de catalogo en el saludo: el catalogo se pide por palabra "catalogo" o tras la opcion 1) -> ESPERA_LISTA | NUMEROS (numeros por coma -> cantidad por articulo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmacion -> cierre. La imagen de cotizacion tiene columnas Cantidad | Producto | Precio.');
+  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 Evelyn / 3 chatbot para tu negocio; sin opcion de catalogo en el saludo: el catalogo se pide por palabra "catalogo" o tras la opcion 1) -> ESPERA_LISTA | NUMEROS (numeros por coma -> cantidad por articulo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmacion -> cierre. La imagen de cotizacion usa 5 columnas (Cantidad | Descripcion solicitada | Producto | Valor unitario | Valor total) cuando proviene de una lista de utiles, y el layout Cantidad | Producto | Precio en el resto de los casos.');
   console.log('2. El Excel de útiles tiene la columna "Número de producto" (1..59); la numeración del catálogo proviene de esa columna.');
   console.log('3. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada).');
   console.log('==================');
