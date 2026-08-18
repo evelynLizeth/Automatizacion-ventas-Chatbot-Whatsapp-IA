@@ -485,6 +485,52 @@ function makeIaReceiptStore(reply, receiptReply) {
   return { store, sent };
 }
 
+function makeIaSequenceStore(replies) {
+  const sent = [];
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: () => {},
+    ai: {
+      isAiEnabled: () => true,
+      buildCatalogContext,
+      askGemini: async () => (replies.length ? replies.shift() : { reply: 'Entendido. ¿Algo más?' }),
+    },
+  });
+  stores.push(store);
+  return { store, sent };
+}
+
+function makeIaScriptedStore(script, receiptReply) {
+  const sent = [];
+  const last = { system: null, history: null };
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: () => {},
+    ai: {
+      isAiEnabled: () => true,
+      buildCatalogContext,
+      askGemini: async (system, history) => {
+        last.system = system;
+        last.history = history;
+        const user = [...history].reverse().find((m) => m.role === 'user');
+        const text = user && Array.isArray(user.parts) && user.parts[0] ? String(user.parts[0].text || '') : '';
+        for (const [re, reply] of script) {
+          if (re.test(text)) return reply;
+        }
+        return { reply: 'Entendido. ¿Algo más?' };
+      },
+      askGeminiReceipt: async () =>
+        receiptReply || { ok: true, monto: 5, titular: 'Evelyn Lizeth Zambrano', fecha: fechaHoy() },
+    },
+  });
+  stores.push(store);
+  return { store, sent, last };
+}
+
 function makeSimilarStore(similarReply) {
   return makeStore({
     ai: {
@@ -1182,7 +1228,7 @@ test('útiles IA — aplica carrito del JSON de Gemini', async () => {
   assert.ok(sent.some((m) => m.body === 'Listo, agregué 2 gomas.'));
 });
 
-test('útiles IA — pedido_finalizado envía imagen final, confirma y detalla el monto del 50%', async () => {
+test('útiles IA — pedido_finalizado muestra la cotización final, pide confirmación y al confirmar detalla el monto del 50%', async () => {
   const { store, sent } = makeIaStore({
     reply: '¡Perfecto! Tu pedido está confirmado.',
     carrito: [{ producto: 'Borrador blanco de queso bester', cantidad: 1 }],
@@ -1192,14 +1238,108 @@ test('útiles IA — pedido_finalizado envía imagen final, confirma y detalla e
   const from = '59399990103';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
-  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
   assert.ok(sent.some((m) => m.image), 'debería enviar la imagen final');
   assert.ok(sent.some((m) => m.body === '¡Perfecto! Tu pedido está confirmado.'), 'debe confirmar el pedido');
+  assert.ok(sent.some((m) => m.body && m.body.includes('Confirmas tu pedido')), 'debe pedir la confirmación');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
   const lastMsg = sent.filter((m) => m.body).pop();
   assert.ok(lastMsg.body.includes('50%'), 'debe indicar el anticipo del 50%');
   assert.ok(lastMsg.body.includes('$'), 'debe indicar el monto exacto a transferir');
   assert.ok(lastMsg.body.includes('Evelyn Lizeth Zambrano'), 'debe indicar el titular');
   assert.equal(store.getSeleccion(from).length, 1);
+});
+
+test('útiles IA — no confirmar el pedido vuelve a la conversación natural con la IA', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: '¿Confirmas tu pedido?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1 }],
+      entrega: { direccion: 'Av 1', diaHora: 'Viernes 3pm', nombre: 'Juan', domicilio: true },
+      pedido_finalizado: true,
+    },
+    { reply: '¡Claro! Retiré la goma. ¿Deseas algo más?', carrito: [] },
+  ]);
+  const from = '59399990162';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  await store.handleMessage(from, { type: 'text', text: 'no, mejor retiro la goma' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  assert.ok(sent.some((m) => m.body === '¡Claro! Retiré la goma. ¿Deseas algo más?'), 'la IA debe retomar la conversación');
+});
+
+test('útiles IA — el anticipo del 50% incluye el recargo por entrega a domicilio', async () => {
+  const { store, sent } = makeIaStore({
+    reply: '¿Confirmas tu pedido?',
+    carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 2 }],
+    entrega: { direccion: 'Av 1', diaHora: 'Viernes 3pm', nombre: 'Juan', domicilio: true },
+    pedido_finalizado: true,
+  });
+  const from = '59399990160';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  const sel = store.getSeleccion(from);
+  const subtotal = sel.reduce((s, it) => s + it.precio * it.qty, 0);
+  const anticipo = Math.round((subtotal + 3) * 0.5 * 100) / 100;
+  const lastMsg = sent.filter((m) => m.body).pop();
+  assert.ok(lastMsg.body.includes(formatPrice(anticipo)), 'debe indicar el 50% del total con recargo');
+});
+
+test('útiles IA — flujo natural completo: opciones, accesorios, entrega con recargo, confirmación y comprobante', async () => {
+  const { store, sent } = makeIaScriptedStore(
+    [
+      [/goma/, { reply: 'Para la goma encontré: 1. Goma en Barra Bester 8 g - $0.56. ¿Cuál deseas?', carrito: [] }],
+      [/^1$/, { reply: '¡Listo! Agregué la goma. ¿Deseas algo más?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }] }],
+      [/eso es todo/, { reply: '¿Te gustaría agregar una mochila, cartuchera o lonchera?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }] }],
+      [/^no$/, { reply: '¿Prefieres entrega a domicilio (recargo de $3.00) o retirar el viernes en la tienda?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }] }],
+      [/domicilio/, { reply: 'Perfecto. ¿Cuál es tu dirección?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }], entrega: { domicilio: true } }],
+      [/av siempre/, { reply: '¿A nombre de quién realizamos la entrega?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }], entrega: { domicilio: true, direccion: 'Av siempre viva 123' } }],
+      [/juan/, { reply: '¿Qué día y a qué hora deseas recibirlo?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }], entrega: { domicilio: true, direccion: 'Av siempre viva 123', nombre: 'Juan Perez' } }],
+      [/viernes/, { reply: '¿Confirmas tu pedido?', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma' }], entrega: { domicilio: true, direccion: 'Av siempre viva 123', nombre: 'Juan Perez', diaHora: 'Viernes 3pm' }, pedido_finalizado: true }],
+    ],
+    { ok: true, monto: 1.78, titular: 'Evelyn Lizeth Zambrano', fecha: fechaHoy() }
+  );
+  const from = '59399990163';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'IA_CHAT');
+  await store.handleMessage(from, { type: 'text', text: 'quiero una goma' });
+  assert.ok(sent.some((m) => m.body.includes('Goma en Barra Bester 8 g')), 'debe mostrar opciones similares');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getSeleccion(from).length, 1);
+  await store.handleMessage(from, { type: 'text', text: 'eso es todo' });
+  assert.ok(sent.some((m) => m.body.includes('mochila, cartuchera o lonchera')), 'debe ofrecer accesorios');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.ok(sent.some((m) => m.body.includes('entrega a domicilio')), 'debe preguntar entrega vs retiro');
+  await store.handleMessage(from, { type: 'text', text: 'domicilio' });
+  await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
+  await store.handleMessage(from, { type: 'text', text: 'Juan Perez' });
+  await store.handleMessage(from, { type: 'text', text: 'viernes a las 3pm' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización final');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
+  const payMsg = sent.filter((m) => m.body).pop();
+  assert.ok(payMsg.body.includes('50%'), 'debe pedir el 50%');
+  assert.ok(payMsg.body.includes('$'), 'debe indicar el monto exacto');
+  assert.ok(payMsg.body.includes('Evelyn Lizeth Zambrano'), 'debe indicar el titular');
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
+  assert.ok(sent.some((m) => m.body && m.body.includes('Verificamos tu comprobante')), 'debe agradecer tras verificar');
+  assert.equal(store.getState(from), undefined, 'debe cerrar la sesión');
+});
+
+test('útiles — buildPriceImage incluye el recargo por entrega a domicilio', async () => {
+  const png = await buildPriceImage(
+    [{ nombre: 'Goma en Barra Bester 8 g', precio: 0.56, qty: 2 }],
+    { recargo: 3, entrega: { direccion: 'Av 1', diaHora: 'Viernes 3pm', nombre: 'Juan' } }
+  );
+  assert.equal(png[0], 0x89);
+  assert.equal(png[1], 0x50);
 });
 
 test('útiles IA — comprobante válido con IA: agradece y cierra la sesión', async () => {
@@ -1214,6 +1354,8 @@ test('útiles IA — comprobante válido con IA: agradece y cierra la sesión', 
   const from = '59399990118';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
   assert.ok(sent.some((m) => m.body && m.body.includes('Verificamos tu comprobante')), 'debe agradecer tras verificar');
@@ -1233,6 +1375,7 @@ test('útiles IA — comprobante inválido con IA: avisa el detalle y sigue espe
   const from = '59399990119';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
   assert.ok(sent.some((m) => m.body && m.body.includes('encontramos un detalle')), 'debe avisar el detalle con amabilidad');
   assert.ok(sent.some((m) => m.body && m.body.includes('el monto es menor al anticipo esperado')), 'debe incluir el motivo');
@@ -1251,6 +1394,7 @@ test('útiles IA — si la imagen no es un comprobante lo avisa y sigue esperand
   const from = '59399990128';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'foto.png' });
   assert.ok(sent.some((m) => m.body && m.body.includes('no parece ser un comprobante')), 'debe indicar que no es un comprobante');
   assert.equal(store.getState(from), 'ESPERA_COMPROBANTE', 'debe seguir esperando el comprobante');
@@ -1268,6 +1412,7 @@ test('útiles IA — no repite el mismo aviso si reenvía el mismo comprobante',
   const from = '59399990129';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   const img = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   await store.handleMessage(from, { type: 'image', data: img, mimeType: 'image/png', filename: 'comprobante.png' });
   await store.handleMessage(from, { type: 'image', data: img, mimeType: 'image/png', filename: 'comprobante.png' });
@@ -1289,6 +1434,7 @@ test('útiles IA — varía la respuesta en comprobantes inválidos y ofrece ase
   const from = '59399990130';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), mimeType: 'image/png' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 2]), mimeType: 'image/png' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 3]), mimeType: 'image/png' });
@@ -1310,6 +1456,7 @@ test('útiles IA — fallo de Gemini al revisar comprobante cae a verificación 
   const from = '59399990120';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
   assert.ok(sent.some((m) => m.body && m.body.includes('Recibimos tu comprobante')), 'debe caer a verificación manual');
   assert.equal(store.getState(from), 'ESPERA_CONFIRMACION_RECIBO');
@@ -1327,6 +1474,7 @@ test('útiles IA — comprobante con fecha antigua: se rechaza y sigue esperando
   const from = '59399990131';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png' });
   const bodies = sent.filter((m) => m.body).map((m) => m.body);
   assert.ok(bodies.some((b) => b.includes('fecha del comprobante es 01/01/2020')), 'debe indicar que la fecha no corresponde');
@@ -1345,6 +1493,7 @@ test('útiles IA — comprobante sin fecha legible: se rechaza y sigue esperando
   const from = '59399990132';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'confirmo mi pedido' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png' });
   const bodies = sent.filter((m) => m.body).map((m) => m.body);
   assert.ok(bodies.some((b) => b.includes('no pude leer la fecha')), 'debe indicar que no leyó la fecha');
