@@ -7,7 +7,7 @@ import ExcelJS from 'exceljs';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
 import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildPriceSvg, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
-import { createUtilesStore } from './lib/store.js';
+import { createUtilesStore, mergeListaRows } from './lib/store.js';
 import { buildCatalogContext } from './lib/ai.js';
 
 const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
@@ -1874,6 +1874,76 @@ test('útiles IA — la red de seguridad agrega a la cotización los no disponib
   const sel = store.getSeleccion(from);
   const escoba = sel.find((it) => it.nombre === 'no disponible' && it.linea === 'escoba');
   assert.ok(escoba, 'el ítem no disponible omitido por Gemini debe agregarse desde la lista');
+});
+
+test('útiles — mergeListaRows reemplaza solo los productos seleccionados y conserva el resto', () => {
+  const base = [
+    { linea: 'juego geometrico', nombre: 'Juego Geométrico Bester de 20 cm', catalogo: 'Juego Geométrico Bester de 20 cm', precio: 2, qty: 1 },
+    { linea: 'regla', nombre: 'Regla Bester de 30 cm', catalogo: 'Regla Bester de 30 cm', precio: 0.5, qty: 1 },
+    { linea: 'esfero verde', nombre: 'no disponible', catalogo: 'no disponible', precio: null, qty: 1 },
+  ];
+  const current = [
+    { linea: 'juego geometrico', nombre: 'Juego Geométrico Bester de 30 cm', catalogo: 'Juego Geométrico Bester de 30 cm', precio: 2.5, qty: 1 },
+    { linea: 'regla', nombre: 'Regla Bester de 30 cm', catalogo: 'Regla Bester de 30 cm', precio: 0.5, qty: 1 },
+  ];
+  const rows = mergeListaRows(base, current);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].linea, 'juego geometrico', 'se conserva el producto solicitado original');
+  assert.equal(rows[0].nombre, 'Juego Geométrico Bester de 30 cm', 'se reemplaza el producto ofrecido');
+  assert.equal(rows[0].precio, 2.5, 'se reemplaza el precio');
+  assert.equal(rows[1].nombre, 'Regla Bester de 30 cm', 'los demás productos quedan intactos');
+  assert.equal(rows[2].nombre, 'no disponible', 'el no disponible sin cambio queda intacto');
+  assert.equal(rows[2].precio, null);
+});
+
+test('útiles — mergeListaRows resuelve no disponibles y agrega productos nuevos', () => {
+  const base = [{ linea: 'esfero verde', nombre: 'no disponible', catalogo: 'no disponible', precio: null, qty: 1 }];
+  const current = [
+    { linea: 'esfero verde', nombre: 'Esfero Azul Borrable', catalogo: 'Esfero Azul Borrable', precio: 0.45, qty: 2 },
+    { linea: 'mochila extra', nombre: 'Mochila Escolar Bester', catalogo: 'Mochila Escolar Bester', precio: 12, qty: 1 },
+  ];
+  const rows = mergeListaRows(base, current);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].linea, 'esfero verde');
+  assert.equal(rows[0].nombre, 'Esfero Azul Borrable');
+  assert.equal(rows[0].precio, 0.45);
+  assert.equal(rows[0].qty, 2);
+  assert.equal(rows[1].nombre, 'Mochila Escolar Bester', 'los productos nuevos se agregan al final');
+});
+
+test('útiles IA — la cotización final de lista conserva las líneas originales y solo cambia el producto elegido', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+      carrito: [
+        { producto: 'Juego Geométrico Bester de 20 cm', cantidad: 1, linea: 'juego geometrico' },
+        { producto: 'Regla Bester de 30 cm', cantidad: 1, linea: 'regla' },
+      ],
+      recibir_lista: true,
+    },
+    {
+      reply: 'Perfecto, ¿Confirmas tu pedido?',
+      carrito: [
+        { producto: 'Juego Geométrico Bester de 30 cm', cantidad: 1, linea: 'juego geometrico' },
+        { producto: 'Regla Bester de 30 cm', cantidad: 1, linea: 'regla' },
+      ],
+      pedido_finalizado: true,
+    },
+  ]);
+  const from = '59399990126';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'regla\njuego geometrico' });
+  const imagenes = sent.filter((m) => m.image);
+  assert.ok(imagenes.length >= 1, 'debe enviar la cotización rápida');
+  await store.handleMessage(from, { type: 'text', text: 'juego geometrico bester de 30cm' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  const finales = sent.filter((m) => m.image);
+  assert.ok(finales.length >= 2, 'debe enviar la cotización final con la confirmación');
+  const sel = store.getSeleccion(from);
+  const juego = sel.find((it) => it.linea === 'juego geometrico');
+  assert.ok(juego, 'la selección actual conserva la línea solicitada original');
+  assert.notEqual(juego.nombre, 'Juego Geométrico Bester de 20 cm', 'el producto ofrecido inicialmente ya no es el seleccionado');
 });
 
 test('fotos — findProductImage resuelve la imagen por número, código o nombre', async () => {
