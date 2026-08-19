@@ -1720,7 +1720,7 @@ test('útiles IA — documento .docx sin parser se envía como inlineData', asyn
 
 test('útiles IA — al recibir una lista envía la cotización rápida y comienza la revisión de los no disponibles', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Ok, para Regla bester de 30 cm: Tengo disponible estas opciones:\n1) Escuadra $0.90\n¿Deseas agregar alguna de estas opciones?',
+    reply: 'En la lista de útiles que me enviaste pide: 1 regla de 30 cm,\ntengo disponible:\n1) Escuadra $0.90\n¿Deseas agregarlo?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
       { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
@@ -1732,7 +1732,7 @@ test('útiles IA — al recibir una lista envía la cotización rápida y comien
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'goma en barra, regla de 30 cm' });
   assert.equal(store.getState(from), 'IA_CHAT');
-  assert.ok(sent.some((m) => m.body && m.body.includes('¿Deseas agregar alguna de estas opciones?')), 'debe comenzar la revisión de los no disponibles');
+  assert.ok(sent.some((m) => m.body && m.body.includes('¿Deseas agregarlo?')), 'debe comenzar la revisión de los no disponibles');
   assert.ok(sent.some((m) => m.image), 'debe enviar la imagen de cotización');
   const sel = store.getSeleccion(from);
   assert.equal(sel.length, 2);
@@ -1743,7 +1743,7 @@ test('útiles IA — al recibir una lista envía la cotización rápida y comien
 test('útiles IA — después de la lista continúa al cierre preguntando niño/niña', async () => {
   const { store, sent } = makeIaSequenceStore([
     {
-      reply: 'Ok, para Goma en barra bester 8 g: Tengo disponible estas opciones:\n1) Goma líquida $0.80\n¿Deseas agregar alguna de estas opciones?',
+      reply: 'En la lista de útiles que me enviaste pide: 1 goma en barra,\ntengo disponible:\n1) Goma líquida $0.80\n¿Deseas agregarlo?',
       carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
       recibir_lista: true,
     },
@@ -1764,7 +1764,7 @@ test('útiles IA — después de la lista continúa al cierre preguntando niño/
 
 test('útiles IA — al recibir una lista: mensaje de preparación, imagen de cotización y luego el reply', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Ok, para esfero verde: Tengo disponible estas opciones:\n1) Esfero Azul Borrable $0.45\n¿Deseas agregar alguna de estas opciones?',
+    reply: 'En la lista de útiles que me enviaste pide: 1 esfero verde,\ntengo disponible:\n1) Esfero Azul Borrable $0.45\n¿Deseas agregarlo?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
       { producto: 'esfero verde', cantidad: 1, linea: 'esfero verde' },
@@ -1777,7 +1777,7 @@ test('útiles IA — al recibir una lista: mensaje de preparación, imagen de co
   await store.handleMessage(from, { type: 'text', text: 'goma en barra\nesfero verde' });
   const idxPrep = sent.findIndex((m) => m.body && m.body.includes('He recibido tu lista de útiles'));
   const idxImg = sent.findIndex((m) => m.image);
-  const idxReply = sent.findIndex((m) => m.body && m.body.includes('Tengo disponible estas opciones'));
+  const idxReply = sent.findIndex((m) => m.body && m.body.includes('tengo disponible'));
   assert.ok(idxPrep !== -1 && idxImg !== -1 && idxReply !== -1, 'deben enviarse el mensaje, la imagen y el reply');
   assert.ok(idxPrep < idxImg, 'el mensaje de preparación debe ir antes de la imagen');
   assert.ok(idxImg < idxReply, 'la imagen debe ir antes del reply de Gemini');
@@ -1905,11 +1905,14 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   assert.ok(last.system.includes('UNA SOLA opción'), 'debe agregar directo los productos con una sola opción');
   assert.ok(last.system.includes('revisión de los productos NO disponibles'), 'tras la cotización inicial debe comenzar la revisión de los no disponibles');
   assert.ok(last.system.includes('NO saludes'), 'el reply tras la imagen no debe volver a saludar');
-  assert.ok(last.system.includes('Tengo disponible estas opciones'), 'el formato de la regla 3 ofrece las opciones disponibles');
-  assert.ok(last.system.includes('Ok, para'), 'la revisión comienza con "Ok, para..."');
+  assert.ok(last.system.includes('tengo disponible'), 'la regla 3 ofrece las opciones disponibles');
+  assert.ok(last.system.includes('En la lista de útiles que me enviaste pide'), 'la revisión comienza con la introducción de la lista');
+  assert.ok(last.system.includes('calculadora científica'), 'la regla exige ofrecer solo productos de la misma función');
+  assert.ok(last.system.includes('MISMA función'), 'debe analizar la función del producto solicitado');
+  assert.ok(last.system.includes('¿por qué me ofreces este producto?'), 'debe poder explicar al cliente por qué ofrece un producto');
   assert.ok(last.system.includes('Pasando al siguiente ítem'), 'la regla prohíbe la transición "Entendido. Pasando al siguiente ítem"');
   assert.ok(last.system.includes('no lo tengo disponible'), 'la regla 3 prohíbe anunciar el producto sin opciones del mismo uso');
-  assert.ok(last.system.includes('Pasa en silencio al siguiente producto'), 'debe pasar en silencio al siguiente no disponible');
+  assert.ok(last.system.includes('en silencio'), 'debe pasar en silencio al siguiente no disponible');
   assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
 });
 
