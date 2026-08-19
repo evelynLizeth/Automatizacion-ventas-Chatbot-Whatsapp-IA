@@ -1781,6 +1781,61 @@ test('útiles IA — al recibir una lista: mensaje de preparación, imagen de co
   assert.ok(idxImg < idxReply, 'la imagen debe ir antes del reply de Gemini');
 });
 
+test('útiles IA — no repite el mensaje de preparación ni la imagen si la lista no cambió', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+      recibir_lista: true,
+    },
+    {
+      reply: '¿Deseas agregar alguna de estas opciones?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+      recibir_lista: true,
+    },
+  ]);
+  const from = '59399990203';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  const prepCount1 = sent.filter((m) => m.body && m.body.includes('He recibido tu lista de útiles')).length;
+  const imgCount1 = sent.filter((m) => m.image).length;
+  assert.equal(prepCount1, 1, 'la primera lista debe enviar el mensaje de preparación una vez');
+  assert.equal(imgCount1, 1, 'la primera lista debe enviar la cotización inicial una vez');
+  await store.handleMessage(from, { type: 'text', text: 'otra cosa' });
+  const prepCount2 = sent.filter((m) => m.body && m.body.includes('He recibido tu lista de útiles')).length;
+  const imgCount2 = sent.filter((m) => m.image).length;
+  assert.equal(prepCount2, 1, 'no debe repetir el mensaje de preparación si la lista no cambió');
+  assert.equal(imgCount2, 1, 'no debe repetir la imagen si la lista no cambió');
+});
+
+test('útiles IA — una lista distinta sí vuelve a enviar el mensaje y la imagen', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: 'Revisé tu lista.',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+      recibir_lista: true,
+    },
+    {
+      reply: 'Recibí tu nueva lista.',
+      carrito: [
+        { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
+        { producto: 'Borrador blanco de queso bester', cantidad: 1, linea: 'borrador' },
+      ],
+      recibir_lista: true,
+    },
+  ]);
+  const from = '59399990204';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  const prepCount = sent.filter((m) => m.body && m.body.includes('He recibido tu lista de útiles')).length;
+  const imgCount = sent.filter((m) => m.image).length;
+  assert.equal(prepCount, 2, 'con una lista distinta debe enviarse el mensaje de nuevo');
+  assert.equal(imgCount, 2, 'con una lista distinta debe enviarse la imagen de nuevo');
+});
+
 test('útiles IA — el prompt muestra la línea solicitada de los productos no disponibles', async () => {
   const { store, sent, last } = makeIaScriptedStore([
     [
@@ -1846,7 +1901,7 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   await store.handleMessage(from, { type: 'text', text: 'hola necesito útiles' });
   assert.ok(last.system.includes('UNA sola pregunta por mensaje'), 'debe exigir una pregunta por mensaje');
   assert.ok(last.system.includes('UNA SOLA opción'), 'debe agregar directo los productos con una sola opción');
-  assert.ok(last.system.includes('uno por uno'), 'debe preguntar si acepta la cotización rápida o elige uno por uno');
+  assert.ok(last.system.includes('revisión de los productos NO disponibles'), 'tras la cotización inicial debe comenzar la revisión de los no disponibles');
   assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
 });
 
