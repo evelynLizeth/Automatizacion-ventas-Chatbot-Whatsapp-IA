@@ -1906,6 +1906,8 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   assert.ok(last.system.includes('revisión de los productos NO disponibles'), 'tras la cotización inicial debe comenzar la revisión de los no disponibles');
   assert.ok(last.system.includes('NO saludes'), 'el reply tras la imagen no debe volver a saludar');
   assert.ok(last.system.includes('no lo tengo exactamente'), 'el formato de la regla 3 se mantiene para la revisión');
+  assert.ok(last.system.includes('no lo tengo disponible'), 'la regla 3 prohíbe anunciar el producto sin opciones del mismo uso');
+  assert.ok(last.system.includes('Pasa en silencio al siguiente producto'), 'debe pasar en silencio al siguiente no disponible');
   assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
 });
 
