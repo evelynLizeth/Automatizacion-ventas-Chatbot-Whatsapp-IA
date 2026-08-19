@@ -1914,6 +1914,12 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   assert.ok(last.system.includes('no lo tengo disponible'), 'la regla 3 prohíbe anunciar el producto sin opciones del mismo uso');
   assert.ok(last.system.includes('en silencio'), 'debe pasar en silencio al siguiente no disponible');
   assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
+  assert.ok(last.system.includes('MISMO PRODUCTO'), 'debe reconocer el mismo producto con redacción distinta');
+  assert.ok(last.system.includes('Cuaderno universitario de 100 hojas a cuadros'), 'el ejemplo de mismo producto aparece en el prompt');
+  assert.ok(last.system.includes('masking grueso'), 'el prompt usa el ejemplo de masking grueso');
+  assert.ok(last.system.includes('DOS filas separadas'), 'el prompt prohíbe agrupar productos distintos');
+  assert.ok(last.system.includes('no tengo un producto que cumpla esa función'), 'la regla prohíbe anuncios genéricos de falta de función');
+  assert.ok(last.system.includes('INCLUYENDO la cantidad'), 'el prompt exige conservar la cantidad en la línea solicitada');
 });
 
 test('útiles — los ítems de una lista guardan la línea solicitada y el nombre del catálogo', async () => {
@@ -1955,20 +1961,20 @@ test('útiles IA — los productos sin coincidencia del carrito van como no disp
     reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
-      { producto: 'artefacto marciano 999', cantidad: 1, linea: 'esfero verde' },
+      { producto: 'masking grueso', cantidad: 1, linea: 'masking grueso' },
     ],
     recibir_lista: true,
   });
   const from = '59399990124';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nesfero verde' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nmasking grueso' });
   assert.ok(sent.some((m) => m.image), 'debe enviar la cotización rápida');
   const sel = store.getSeleccion(from);
   assert.equal(sel.length, 2);
   const nd = sel.find((it) => it.nombre === 'no disponible');
   assert.ok(nd, 'el producto sin coincidencia debe quedar como no disponible');
-  assert.equal(nd.linea, 'esfero verde');
+  assert.equal(nd.linea, 'masking grueso');
   assert.equal(nd.precio, null);
 });
 
@@ -1986,6 +1992,71 @@ test('útiles IA — la red de seguridad agrega a la cotización los no disponib
   const sel = store.getSeleccion(from);
   const escoba = sel.find((it) => it.nombre === 'no disponible' && it.linea === 'escoba');
   assert.ok(escoba, 'el ítem no disponible omitido por Gemini debe agregarse desde la lista');
+});
+
+test('útiles IA — la cotización inicial separa productos distintos aunque Gemini los agrupe', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'En la lista de útiles que me enviaste pide: 1 masking grueso,\ntengo disponible:\n...',
+    carrito: [
+      { producto: 'masking', cantidad: 2, linea: 'masking' },
+      { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: '1 goma en barra' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990126';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1 masking grueso\n1 masking delgado\n1 goma en barra' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización inicial');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 3, 'debe haber una fila por cada línea solicitada');
+  const grueso = sel.find((it) => it.linea === '1 masking grueso');
+  const delgado = sel.find((it) => it.linea === '1 masking delgado');
+  assert.ok(grueso, 'debe conservarse la línea exacta "1 masking grueso"');
+  assert.ok(delgado, 'debe conservarse la línea exacta "1 masking delgado"');
+  assert.equal(grueso.nombre, 'no disponible', 'masking grueso no existe en el catálogo');
+  assert.equal(grueso.qty, 1, 'la cantidad de cada línea es exacta');
+  assert.equal(delgado.qty, 1, 'la cantidad de cada línea es exacta');
+  assert.equal(grueso.linea, '1 masking grueso', 'no deben agruparse productos distintos');
+});
+
+test('útiles IA — la cotización inicial respeta la cantidad exacta de cada línea', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'En la lista de útiles que me enviaste pide: 2 cuadernos universitarios de 100 hojas a cuadros,\ntengo disponible:\n...',
+    carrito: [
+      { producto: 'Cuaderno universitario cuadros 100 hojas marca zien', cantidad: 2, linea: '2 cuadernos universitarios de 100 hojas a cuadros' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990127';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2 cuadernos universitarios de 100 hojas a cuadros' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización inicial');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].linea, '2 cuadernos universitarios de 100 hojas a cuadros', 'se conserva la línea verbatim con su cantidad');
+  assert.equal(sel[0].qty, 2, 'la cantidad solicitada es exacta');
+  assert.ok(sel[0].precio != null, 'el cuaderno universitario coincide con el catálogo');
+});
+
+test('útiles IA — el mismo producto con redacción distinta se agrega directo a la cotización', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Te envío la cotización de lo solicitado. Revísalo y cuéntame si estás de acuerdo?',
+    carrito: [
+      { producto: 'Cuaderno universitario cuadros 100 hojas marca zien', cantidad: 1, linea: '1 Cuaderno universitario de 100 hojas a cuadros' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990128';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1 Cuaderno universitario de 100 hojas a cuadros' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización inicial');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 1);
+  assert.ok(sel[0].precio != null, 'el mismo producto se agrega con precio, sin marcarlo no disponible');
+  assert.equal(sel[0].linea, '1 Cuaderno universitario de 100 hojas a cuadros', 'se conserva la redacción del cliente');
 });
 
 test('útiles — mergeListaRows reemplaza solo los productos seleccionados y conserva el resto', () => {
