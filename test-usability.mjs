@@ -4,6 +4,8 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
+
+process.env.IA_IMAGEN_REPLY_DELAY_MS = '10';
 import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
 import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
 import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildPriceSvg, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
@@ -1716,9 +1718,9 @@ test('útiles IA — documento .docx sin parser se envía como inlineData', asyn
   assert.ok(inline.inlineData.mimeType.includes('wordprocessingml.document'));
 });
 
-test('útiles IA — al recibir una lista envía la cotización rápida y pregunta aceptar o seleccionar uno por uno', async () => {
+test('útiles IA — al recibir una lista envía la cotización rápida y comienza la revisión de los no disponibles', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    reply: 'Para el producto "Regla bester de 30 cm" que solicitas, no lo tengo exactamente, pero puedo ofrecerte estas opciones que cumplen el mismo objetivo: 1) Escuadra $0.90. ¿Deseas agregar alguna de estas opciones?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
       { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
@@ -1730,7 +1732,7 @@ test('útiles IA — al recibir una lista envía la cotización rápida y pregun
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'goma en barra, regla de 30 cm' });
   assert.equal(store.getState(from), 'IA_CHAT');
-  assert.ok(sent.some((m) => m.body && m.body.includes('cotización rápida o prefieres seleccionar')), 'debe preguntar si acepta la cotización rápida o prefiere seleccionar uno por uno');
+  assert.ok(sent.some((m) => m.body && m.body.includes('¿Deseas agregar alguna de estas opciones?')), 'debe comenzar la revisión de los no disponibles');
   assert.ok(sent.some((m) => m.image), 'debe enviar la imagen de cotización');
   const sel = store.getSeleccion(from);
   assert.equal(sel.length, 2);
@@ -1738,10 +1740,10 @@ test('útiles IA — al recibir una lista envía la cotización rápida y pregun
   assert.equal(sel[0].qty, 2);
 });
 
-test('útiles IA — si acepta la cotización rápida continúa al cierre preguntando niño/niña', async () => {
+test('útiles IA — después de la lista continúa al cierre preguntando niño/niña', async () => {
   const { store, sent } = makeIaSequenceStore([
     {
-      reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+      reply: 'Para el producto "Goma en barra bester 8 g" que solicitas, no lo tengo exactamente. ¿Deseas agregar alguna de estas opciones?',
       carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
       recibir_lista: true,
     },
@@ -1762,7 +1764,7 @@ test('útiles IA — si acepta la cotización rápida continúa al cierre pregun
 
 test('útiles IA — al recibir una lista: mensaje de preparación, imagen de cotización y luego el reply', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Te envié la cotización inicial de tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    reply: 'Para el producto "esfero verde" que solicitas, no lo tengo exactamente, pero puedo ofrecerte estas opciones que cumplen el mismo objetivo. ¿Deseas agregar alguna de estas opciones?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
       { producto: 'esfero verde', cantidad: 1, linea: 'esfero verde' },
@@ -1775,7 +1777,7 @@ test('útiles IA — al recibir una lista: mensaje de preparación, imagen de co
   await store.handleMessage(from, { type: 'text', text: 'goma en barra\nesfero verde' });
   const idxPrep = sent.findIndex((m) => m.body && m.body.includes('He recibido tu lista de útiles'));
   const idxImg = sent.findIndex((m) => m.image);
-  const idxReply = sent.findIndex((m) => m.body && m.body.includes('cotización inicial de tu lista'));
+  const idxReply = sent.findIndex((m) => m.body && m.body.includes('no lo tengo exactamente'));
   assert.ok(idxPrep !== -1 && idxImg !== -1 && idxReply !== -1, 'deben enviarse el mensaje, la imagen y el reply');
   assert.ok(idxPrep < idxImg, 'el mensaje de preparación debe ir antes de la imagen');
   assert.ok(idxImg < idxReply, 'la imagen debe ir antes del reply de Gemini');
@@ -1841,7 +1843,7 @@ test('útiles IA — el prompt muestra la línea solicitada de los productos no 
     [
       /goma/,
       {
-        reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+        reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
         carrito: [
           { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
           { producto: 'escoba', cantidad: 1, linea: 'escoba' },
@@ -1861,10 +1863,10 @@ test('útiles IA — el prompt muestra la línea solicitada de los productos no 
   assert.ok(last.system.includes('no disponible'), 'debe conservar el marcador no disponible');
 });
 
-test('útiles IA — si elige seleccionar uno por uno se pregunta un solo producto por mensaje', async () => {
+test('útiles IA — tras la lista se pregunta un solo producto por mensaje', async () => {
   const { store, sent } = makeIaSequenceStore([
     {
-      reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+      reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
       carrito: [
         { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
         { producto: 'Regla bester de 30 cm', cantidad: 1, linea: 'regla de 30 cm' },
@@ -1902,6 +1904,8 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   assert.ok(last.system.includes('UNA sola pregunta por mensaje'), 'debe exigir una pregunta por mensaje');
   assert.ok(last.system.includes('UNA SOLA opción'), 'debe agregar directo los productos con una sola opción');
   assert.ok(last.system.includes('revisión de los productos NO disponibles'), 'tras la cotización inicial debe comenzar la revisión de los no disponibles');
+  assert.ok(last.system.includes('NO saludes'), 'el reply tras la imagen no debe volver a saludar');
+  assert.ok(last.system.includes('no lo tengo exactamente'), 'el formato de la regla 3 se mantiene para la revisión');
   assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
 });
 
@@ -1941,7 +1945,7 @@ test('útiles — buildPriceSvg: 5 columnas con lista y layout normal sin lista'
 
 test('útiles IA — los productos sin coincidencia del carrito van como no disponible', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
     carrito: [
       { producto: 'Goma en barra bester 8 g', cantidad: 2, linea: '2 goma en barra' },
       { producto: 'artefacto marciano 999', cantidad: 1, linea: 'esfero verde' },
@@ -1963,7 +1967,7 @@ test('útiles IA — los productos sin coincidencia del carrito van como no disp
 
 test('útiles IA — la red de seguridad agrega a la cotización los no disponibles que Gemini omite', async () => {
   const { store, sent } = makeIaStore({
-    reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
     carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
     recibir_lista: true,
   });
@@ -2015,7 +2019,7 @@ test('útiles — mergeListaRows resuelve no disponibles y agrega productos nuev
 test('útiles IA — la cotización final de lista conserva las líneas originales y solo cambia el producto elegido', async () => {
   const { store, sent } = makeIaSequenceStore([
     {
-      reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+      reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
       carrito: [
         { producto: 'Juego Geométrico Bester de 20 cm', cantidad: 1, linea: 'juego geometrico' },
         { producto: 'Regla Bester de 30 cm', cantidad: 1, linea: 'regla' },
