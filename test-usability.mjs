@@ -1913,13 +1913,14 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   assert.ok(last.system.includes('Pasando al siguiente ítem'), 'la regla prohíbe la transición "Entendido. Pasando al siguiente ítem"');
   assert.ok(last.system.includes('no lo tengo disponible'), 'la regla 3 prohíbe anunciar el producto sin opciones del mismo uso');
   assert.ok(last.system.includes('en silencio'), 'debe pasar en silencio al siguiente no disponible');
-  assert.ok(last.system.includes('ya no agregará nada más'), 'la cotización final solo se envía al confirmar');
+  assert.ok(last.system.includes('ya no desea agregar nada más'), 'la cotización final solo se envía al confirmar');
   assert.ok(last.system.includes('MISMO PRODUCTO'), 'debe reconocer el mismo producto con redacción distinta');
   assert.ok(last.system.includes('Cuaderno universitario de 100 hojas a cuadros'), 'el ejemplo de mismo producto aparece en el prompt');
   assert.ok(last.system.includes('masking grueso'), 'el prompt usa el ejemplo de masking grueso');
   assert.ok(last.system.includes('DOS filas separadas'), 'el prompt prohíbe agrupar productos distintos');
   assert.ok(last.system.includes('no tengo un producto que cumpla esa función'), 'la regla prohíbe anuncios genéricos de falta de función');
   assert.ok(last.system.includes('INCLUYENDO la cantidad'), 'el prompt exige conservar la cantidad en la línea solicitada');
+  assert.ok(last.system.includes('Te envío la cotización de lo solicitado. Revísalo y cuéntame si estás de acuerdo?'), 'la regla CONFIRMACIÓN usa la frase nueva con signo de interrogación');
 });
 
 test('útiles — los ítems de una lista guardan la línea solicitada y el nombre del catálogo', async () => {
@@ -2127,6 +2128,155 @@ test('útiles IA — la cotización final de lista conserva las líneas original
   const juego = sel.find((it) => it.linea === 'juego geometrico');
   assert.ok(juego, 'la selección actual conserva la línea solicitada original');
   assert.notEqual(juego.nombre, 'Juego Geométrico Bester de 20 cm', 'el producto ofrecido inicialmente ya no es el seleccionado');
+});
+
+test('útiles IA — una lista multi-línea genera la cotización aunque Gemini no marque recibir_lista', async () => {
+  const { store, sent } = makeIaStore({
+    reply: '¿Deseas alguna de estas opciones?',
+    carrito: [
+      { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: '1 goma en barra' },
+      { producto: 'masking grueso', cantidad: 1, linea: '1 masking grueso' },
+    ],
+  });
+  const from = '59399990130';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1 goma en barra\n1 masking grueso' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización rápida aunque falte recibir_lista');
+  assert.ok(
+    sent.some((m) => typeof m.body === 'string' && m.body.includes('He recibido tu lista')),
+    'debe enviar el mensaje de preparación de la lista'
+  );
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 2, 'la lista multi-línea siembra una fila por línea');
+});
+
+test('útiles IA — la fusión del carrito conserva los ítems que Gemini omite', async () => {
+  const { store } = makeIaSequenceStore([
+    {
+      reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
+      carrito: [
+        { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: '1 goma en barra' },
+        { producto: 'masking grueso', cantidad: 1, linea: '1 masking grueso' },
+      ],
+      recibir_lista: true,
+    },
+    {
+      reply: 'Perfecto, ¿Confirmas tu pedido?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: '1 goma en barra' }],
+      pedido_finalizado: true,
+    },
+  ]);
+  const from = '59399990131';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '1 goma en barra\n1 masking grueso' });
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  const sel = store.getSeleccion(from);
+  const nd = sel.find((it) => it.nombre === 'no disponible' && it.linea === '1 masking grueso');
+  assert.ok(nd, 'el ítem omitido por Gemini en la revisión se conserva en la cotización final');
+});
+
+test('útiles — mergeListaRows casa líneas con y sin número inicial', () => {
+  const base = [{ linea: '1 masking grueso', nombre: 'no disponible', catalogo: 'no disponible', precio: null, qty: 1 }];
+  const current = [{ linea: 'masking grueso', nombre: 'Cinta masking gruesa', catalogo: 'Cinta masking gruesa', precio: 1.2, qty: 1 }];
+  const rows = mergeListaRows(base, current);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].linea, '1 masking grueso', 'se conserva la línea original de la lista');
+  assert.equal(rows[0].nombre, 'Cinta masking gruesa');
+  assert.equal(rows[0].precio, 1.2);
+});
+
+test('útiles IA — las líneas duplicadas de la lista se mantienen como dos filas separadas', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
+    carrito: [],
+    recibir_lista: true,
+  });
+  const from = '59399990132';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2 cuadernos universitarios de 100 hojas a cuadros\n2 cuadernos universitarios de 100 hojas a cuadros' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización inicial');
+  const sel = store.getSeleccion(from);
+  assert.equal(sel.length, 2, 'las dos líneas idénticas generan dos filas, sin sumar cantidades');
+  assert.equal(sel[0].linea, '2 cuadernos universitarios de 100 hojas a cuadros');
+  assert.equal(sel[1].linea, '2 cuadernos universitarios de 100 hojas a cuadros');
+  assert.equal(sel[0].qty, 2, 'cada fila conserva la cantidad de su línea');
+  assert.equal(sel[1].qty, 2, 'cada fila conserva la cantidad de su línea');
+});
+
+test('útiles IA — enviar_cotizacion con datos de entrega usa la cotización final y no se repite', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    { reply: 'He agregado la goma.', carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }] },
+    {
+      reply: 'Perfecto, ¿Confirmas tu pedido?',
+      entrega: { direccion: 'Av. Siempre Viva 123', nombre: 'Ana', diaHora: 'viernes 3pm', domicilio: true },
+    },
+    { reply: 'Aquí está tu cotización.', enviar_cotizacion: true },
+    { reply: 'Claro, aquí la tienes de nuevo.', enviar_cotizacion: true },
+  ]);
+  const from = '59399990135';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: 'domicilio' });
+  await store.handleMessage(from, { type: 'text', text: 'pásame la cotización' });
+  const tras1 = sent.filter((m) => m.image).length;
+  assert.ok(tras1 >= 1, 'con datos de entrega se envía la cotización');
+  await store.handleMessage(from, { type: 'text', text: 'pásame la cotización otra vez' });
+  assert.equal(sent.filter((m) => m.image).length, tras1, 'no se repite la imagen si el pedido no cambió');
+});
+
+test('útiles IA — en IA_CONFIRMA_PEDIDO "catálogo" lo atiende la IA y no el flujo de reglas', async () => {
+  const { store, sent } = makeIaSequenceStore([
+    {
+      reply: 'Te envío la cotización de lo solicitado. Revísalo y cuéntame si estás de acuerdo?',
+      carrito: [{ producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' }],
+      pedido_finalizado: true,
+    },
+    { reply: 'Claro, aquí tienes el catálogo.', enviar_catalogo: true },
+  ]);
+  const from = '59399990133';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  assert.equal(store.getState(from), 'IA_CONFIRMA_PEDIDO');
+  await store.handleMessage(from, { type: 'text', text: 'catálogo' });
+  assert.equal(store.getState(from), 'IA_CHAT', 'la IA atiende el catálogo sin secuestrar la confirmación');
+  assert.ok(sent.some((m) => m.image), 'el catálogo se envía en imagen por la IA');
+});
+
+test('útiles IA — con IA activa los intents de reglas responden pago y cotización', async () => {
+  const { store, sent } = makeIaStore({ reply: 'ok' });
+  const from = '59399990134';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'catálogo' });
+  assert.equal(store.getState(from), 'NUMEROS', 'catálogo lleva al flujo de reglas de números');
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'AGREGADO');
+  await store.handleMessage(from, { type: 'text', text: 'cuánto es el pago' });
+  assert.ok(sent.some((m) => typeof m.body === 'string' && m.body.includes('50%')), 'el pago responde aunque la IA esté activa');
+  await store.handleMessage(from, { type: 'text', text: 'cotiza' });
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION', 'la palabra cotiza muestra la cotización en reglas');
+});
+
+test('útiles — la pregunta de género acepta adolescente, hombre y mujer', async () => {
+  const { store } = makeStore();
+  const from = '59399990137';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'SUGERENCIA');
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  assert.equal(store.getState(from), 'CONFIRMA_COTIZACION');
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'GENERO');
+  await store.handleMessage(from, { type: 'text', text: 'es para una adolescente' });
+  assert.equal(store.getState(from), 'ENTREGA', 'acepta adolescente');
 });
 
 test('fotos — findProductImage resuelve la imagen por número, código o nombre', async () => {
