@@ -1760,6 +1760,52 @@ test('útiles IA — si acepta la cotización rápida continúa al cierre pregun
   assert.ok(sent.some((m) => m.body && m.body.includes('niña o para niño')), 'debe continuar al cierre preguntando el género');
 });
 
+test('útiles IA — al recibir una lista: mensaje de preparación, imagen de cotización y luego el reply', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Te envié la cotización inicial de tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+    carrito: [
+      { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
+      { producto: 'esfero verde', cantidad: 1, linea: 'esfero verde' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990201';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nesfero verde' });
+  const idxPrep = sent.findIndex((m) => m.body && m.body.includes('He recibido tu lista de útiles'));
+  const idxImg = sent.findIndex((m) => m.image);
+  const idxReply = sent.findIndex((m) => m.body && m.body.includes('cotización inicial de tu lista'));
+  assert.ok(idxPrep !== -1 && idxImg !== -1 && idxReply !== -1, 'deben enviarse el mensaje, la imagen y el reply');
+  assert.ok(idxPrep < idxImg, 'el mensaje de preparación debe ir antes de la imagen');
+  assert.ok(idxImg < idxReply, 'la imagen debe ir antes del reply de Gemini');
+});
+
+test('útiles IA — el prompt muestra la línea solicitada de los productos no disponibles', async () => {
+  const { store, sent, last } = makeIaScriptedStore([
+    [
+      /goma/,
+      {
+        reply: 'Revisé tu lista. ¿Estás de acuerdo con esta cotización rápida o prefieres seleccionar los artículos uno por uno?',
+        carrito: [
+          { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
+          { producto: 'escoba', cantidad: 1, linea: 'escoba' },
+        ],
+        recibir_lista: true,
+      },
+    ],
+    [/uno por uno/, { reply: 'Para el producto "escoba" que solicitas, reviso qué opciones cumplen ese objetivo.' }],
+  ]);
+  const from = '59399990202';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nescoba' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización inicial');
+  await store.handleMessage(from, { type: 'text', text: 'uno por uno' });
+  assert.ok(last.system.includes('escoba'), 'el prompt debe mostrar la línea solicitada del no disponible');
+  assert.ok(last.system.includes('no disponible'), 'debe conservar el marcador no disponible');
+});
+
 test('útiles IA — si elige seleccionar uno por uno se pregunta un solo producto por mensaje', async () => {
   const { store, sent } = makeIaSequenceStore([
     {
