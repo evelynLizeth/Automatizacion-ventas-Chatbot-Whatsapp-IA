@@ -1921,6 +1921,9 @@ test('útiles IA — el prompt exige una pregunta por mensaje y la cotización f
   assert.ok(last.system.includes('no tengo un producto que cumpla esa función'), 'la regla prohíbe anuncios genéricos de falta de función');
   assert.ok(last.system.includes('INCLUYENDO la cantidad'), 'el prompt exige conservar la cantidad en la línea solicitada');
   assert.ok(last.system.includes('Te envío la cotización de lo solicitado. Revísalo y cuéntame si estás de acuerdo?'), 'la regla CONFIRMACIÓN usa la frase nueva con signo de interrogación');
+  assert.ok(last.system.includes('TODOS los ítems de la lista'), 'la cotización inicial incluye todos los ítems de la lista');
+  assert.ok(last.system.includes('no disponible" con precio 0.00'), 'los ítems sin coincidencia se muestran como no disponible con 0.00');
+  assert.ok(last.system.includes('CADA ítem visible en la foto'), 'al leer una foto no se omite ningún ítem');
 });
 
 test('útiles — los ítems de una lista guardan la línea solicitada y el nombre del catálogo', async () => {
@@ -2277,6 +2280,26 @@ test('útiles — la pregunta de género acepta adolescente, hombre y mujer', as
   assert.equal(store.getState(from), 'GENERO');
   await store.handleMessage(from, { type: 'text', text: 'es para una adolescente' });
   assert.equal(store.getState(from), 'ENTREGA', 'acepta adolescente');
+});
+
+test('útiles IA — la cotización inicial por foto incluye los ítems sin coincidencia como no disponible', async () => {
+  const { store, sent } = makeIaStore({
+    reply: 'Para el primer producto no disponible: ¿deseas alguna de estas opciones?',
+    carrito: [
+      { producto: 'Goma en barra bester 8 g', cantidad: 1, linea: 'goma en barra' },
+      { producto: 'masking grueso', cantidad: 1, linea: 'masking grueso' },
+    ],
+    recibir_lista: true,
+  });
+  const from = '59399990140';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'lista.png' });
+  assert.ok(sent.some((m) => m.image), 'debe enviar la cotización inicial de la foto');
+  const sel = store.getSeleccion(from);
+  const nd = sel.find((it) => it.nombre === 'no disponible' && it.linea === 'masking grueso');
+  assert.ok(nd, 'el ítem sin coincidencia leído en la foto queda como no disponible');
+  assert.equal(nd.precio, null);
+  assert.equal(nd.qty, 1);
 });
 
 test('fotos — findProductImage resuelve la imagen por número, código o nombre', async () => {
