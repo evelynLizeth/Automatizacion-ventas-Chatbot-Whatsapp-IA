@@ -1,8 +1,7 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import express from 'express';
-import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized } from './lib/excel.js';
-import { generateReply, HELP, DEACTIVATION_REPLY, isActivationMessage, isDeactivationMessage } from './lib/search.js';
+import { loadWorkbook } from './lib/excel.js';
 import { getUtilesProducts, getUtilesSheet } from './lib/utiles.js';
 import { createUtilesStore, ESPERA_GENERANDO } from './lib/store.js';
 import { isAiEnabled } from './lib/ai.js';
@@ -13,7 +12,6 @@ app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf.toString('
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'cambia-este-token';
 const APP_SECRET = process.env.APP_SECRET || '';
-const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
 const UTILES_PATH = process.env.UTILES_PATH || './UtilesEscolares.xlsx';
 
 const GRAPH_VERSION = process.env.GRAPH_VERSION || 'v22.0';
@@ -24,19 +22,13 @@ const YCLOUD_API_KEY = process.env.YCLOUD_API_KEY || '';
 const YCLOUD_PHONE = process.env.YCLOUD_PHONE || '';
 const YCLOUD_WEBHOOK_SECRET = process.env.YCLOUD_WEBHOOK_SECRET || '';
 
-let cached = { key: '', laptops: null, phones: null, utiles: null };
-
-const activeSessions = new Set();
+let cached = { key: '', utiles: null };
 
 async function getData() {
-  const key = `${EXCEL_PATH}|${UTILES_PATH}`;
-  if (cached.key === key && cached.utiles) return cached;
-  const wb = await loadWorkbook(EXCEL_PATH);
-  const laptops = getLaptops(wb.getWorksheet('Laptos'));
-  const phones = getAuthorizedPhones(wb.getWorksheet('Autorizacion'));
+  if (cached.utiles && cached.key === UTILES_PATH) return cached;
   const uwb = await loadWorkbook(UTILES_PATH);
   const utiles = getUtilesProducts(getUtilesSheet(uwb));
-  cached = { key, laptops, phones, utiles };
+  cached = { key: UTILES_PATH, utiles };
   return cached;
 }
 
@@ -309,40 +301,8 @@ app.post('/webhook', async (req, res) => {
     if (!msg.from) continue;
     runSerialized(msg.from, async () => {
       try {
-        const isText = msg.type === 'text';
         const text = msg.text?.body ?? '';
         console.log('[webhook] mensaje de', msg.from, ':', text || `[${msg.type}]`);
-        const { laptops, phones } = await getData();
-        const authorized = isAuthorized(msg.from, phones);
-        const activeLaptop = activeSessions.has(msg.from);
-
-        if (authorized && activeLaptop && isText) {
-          if (isDeactivationMessage(text)) {
-            activeSessions.delete(msg.from);
-            await sendWhatsApp(msg.from, DEACTIVATION_REPLY, msg.businessFrom);
-            return;
-          }
-          const reply = generateReply(text, laptops);
-          await sendWhatsApp(msg.from, reply, msg.businessFrom);
-          return;
-        }
-
-        if (authorized && activeLaptop) {
-          console.log('[webhook] media en sesion de equipos ignorada', msg.from);
-          return;
-        }
-
-        if (authorized && !activeLaptop && isActivationMessage(text)) {
-          activeSessions.add(msg.from);
-          await sendWhatsApp(msg.from, HELP, msg.businessFrom);
-          return;
-        }
-
-        if (!authorized && isActivationMessage(text)) {
-          console.log('[webhook] numero no autorizado intenta activar el bot', msg.from);
-          return;
-        }
-
         const normalized = await normalizeInbound(msg);
         if (utilesStore.isBusy(msg.from)) {
           await sendWhatsApp(msg.from, ESPERA_GENERANDO, msg.businessFrom);
@@ -357,7 +317,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('Bot de consulta de equipos y útiles escolares activo');
+  res.send('Agente de venta de desarrollo digital (agentes de WhatsApp, apps web, páginas web) con demo de venta de útiles escolares activo');
 });
 
 app.listen(PORT, () => {

@@ -1,31 +1,22 @@
-# Bot WhatsApp para consulta de equipos y útiles escolares
+# Bot WhatsApp de venta de útiles escolares
 
-Bot con dos flujos en WhatsApp:
+Bot de WhatsApp que atiende (sin autorización, público) el flujo de **venta de útiles escolares** leyendo un catálogo en `UtilesEscolares.xlsx`: cota listas de útiles, muestra precios con imagen y registra pedidos.
 
-1. **Consulta de equipos** (laptops arrendadas/disponibles) leyendo `Laptops.xlsx`. Solo usuarios cuyos números estén en la hoja `Autorizacion` pueden activarlo (escribiendo `hola bot`).
-2. **Venta de útiles escolares** (público, sin autorización) leyendo `UtilesEscolares.xlsx`: cotiza listas de útiles, muestra precios con imagen y registra pedidos.
+Además, el **primer mensaje** entra al **agente principal**, que vende los servicios de desarrollo (agentes de WhatsApp, apps web y páginas web). El diálogo lo lleva Gemini; las opciones del menú son `1. Ver una DEMO de un agente de ventas` / `2. Comunicarme con Evelyn` / `3. Solicitar una APP, Página web o Chatbot`. El flujo de útiles escolares quedó como **demo** que se abre con la opción 1 (o diciendo "demo") y, al cerrarse, **vuelve siempre al menú principal**.
+
+> Histórico: este bot era una consulta de equipos (laptops) + útiles escolares. El flujo de equipos fue eliminado; queda solo el de útiles.
 
 **Producción**: desplegado en Render en `https://pc-venta-ia.onrender.com`, con YCloud como proveedor (BSP) para recibir/enviar mensajes. El endpoint del webhook es permanente y **no cambia**: `https://pc-venta-ia.onrender.com/webhook`.
-
-## Estructura del Excel
-
-| Hoja | Contenido |
-|---|---|
-| `Laptos` | Datos con fila de encabezado en la **fila 4** (desde la fila 5), columnas en este orden: Código, Empresa, Usuario, Marca y modelo, Características, N° Serial, Celular, Correo, Estado |
-| `Autorizacion` | Fila 1 encabezado `Nombre`, `Celular`; desde fila 2 los números permitidos |
-
-- El número de celular se compara por sus últimos 9 dígitos, así que sirve tanto `593987695938` como `0987695938`.
-- Para que una persona pueda consultar equipos, su número debe estar en `Autorizacion` y escribir `hola bot`.
-- `Laptops.xlsx` contiene datos personales (Celular/Correo) → el repositorio de GitHub debe ser **privado**.
 
 ### Estructura de `UtilesEscolares.xlsx`
 
 | Hoja | Contenido |
 |---|---|
-| `Hoja1` | Fila 1 encabezado `Producto | Descripcion | Precio de venta al publico`; desde fila 2 los ~58 productos |
+| `Hoja1` | Fila 1 encabezado `Producto | Descripcion | Precio de venta al publico`; desde fila 2 los ~59 productos |
 
 - Los precios se leen de la columna cuyo encabezado normalizado sea `precio de venta al publico` (tolera mayúsculas, acentos, NBSP y espacios finales).
 - Este catálogo es de uso público: cualquier persona que escriba al bot puede cotizar.
+- El catálogo se carga en memoria solo cuando se necesita (al entrar al flujo, ver el catálogo o consultar un producto); el saludo y la opción Evelyn no lo cargan.
 
 ## Despliegue en Render (producción)
 
@@ -56,10 +47,10 @@ Render free duerme tras ~15 min de inactividad. Configurar un monitor gratuito e
 
 ## Cómo se actualizan los datos del Excel
 
-El servidor lee `Laptops.xlsx` y `UtilesEscolares.xlsx` al arrancar y los cachea durante toda la vida del proceso. Para reflejar cambios:
+El servidor lee `UtilesEscolares.xlsx` al arrancar y lo cachea durante toda la vida del proceso. Para reflejar cambios:
 
 1. Editar el archivo `.xlsx` localmente.
-2. Subir el archivo actualizado a GitHub (rama `main`) — los nombres deben seguir siendo `Laptops.xlsx` y `UtilesEscolares.xlsx`.
+2. Subir el archivo actualizado a GitHub (rama `main`) — el nombre debe seguir siendo `UtilesEscolares.xlsx`.
 3. Render redeploya automáticamente con cada push y el bot usa los datos nuevos.
 
 El endpoint de YCloud **no cambia** en este ciclo.
@@ -79,27 +70,20 @@ Sin `YCLOUD_API_KEY`/`PHONE_NUMBER_ID` configurados, las respuestas solo se logu
 
 ## Consultas que entiende el bot
 
-### Flujo de equipos (autorizados)
+El **primer mensaje** de cualquier persona abre el **menú principal** (agente de servicios):
 
-El bot de equipos solo responde a números autorizados (hoja `Autorizacion`) y **dentro de una sesión activa**.
+- Se ofrece `1. Ver una DEMO de un agente de ventas` / `2. Comunicarme con Evelyn` / `3. Solicitar una APP, Página web o Chatbot para tu negocio`.
+- Con `GEMINI_API_KEY`, el diálogo de servicios lo maneja Gemini (sin IA se responde con un menú estático); los JSON que puede devolver son `ir_demo`, `formulario` (arranca el formulario de requerimientos), `evelyn`, `despedirse` y `requerimientos`.
+- La **opción 1** (o palabras como "demo") inicia la **demo** del agente de útiles escolares: streaming del comportamiento real del bot. Al terminar la demo (compra confirmada, despedida, pasar a Evelyn, etc.) se envía un aviso de cierre y se **vuelve al menú principal**.
+- La **opción 2** (o "necesito comunicarme con Evelyn") pasa la conversación del cliente a la humana Evelyn.
+- La **opción 3** (o un texto con "chatbot") abre un **formulario de requerimientos** cuya primera pregunta es el tipo de servicio (Agente de WhatsApp / App web / Página web) seguida de 8 preguntas de negocio; al final hay un resumen aprobable y editable campo por campo. Al aprobar, los requerimientos se registran en el log y un asesor contacta al cliente.
+- "Salir de la demo", "volver al menú principal" o "terminar la demo" salen de la demo hacia el menú en cualquier momento.
+- Dentro de la demo, el agente de útiles responde con el flujo de abajo.
 
-- Escribe `hola bot` para activar el bot (responde con el texto de ayuda). Mientras la sesión esté activa responde todas las consultas.
-- Escribe `chao bot` para desactivarlo (responde una despedida). Sin sesión activa el bot no responde nada.
+El flujo de **útiles escolares** (dentro de la demo):
 
-Consultas dentro de una sesión:
-
-- `equipos disponibles` → lista los que están `Disponible`
-- `equipos arrendados` → lista los `Arrendado`
-- `cuantos equipos hay` / `inventario` → totales por estado
-- `serial 7D9J4M3` (o un serial suelto) → detalle del equipo con ese serial
-- Cualquier texto con marca, empresa o usuario (`Dell`, `Mercado libre`, `Luis Ceron`) → coincidencias relevantes con su detalle
-
-### Flujo de útiles escolares (público)
-
-Cualquier persona que escriba al número recibe el flujo de útiles:
-
-- El primer mensaje responde con un saludo: `1. Realizar una cotización de útiles escolares` / `2. Comunicarme con Evelyn` / `3. Solicitar un Chatbot Inteligente para mi negocio`. El catálogo ya no está en el saludo: se muestra al pedirlo por palabra (ej. "catálogo", "qué tienes") o después de la opción 1 (pregunta "¿Deseas ver lo que tengo disponible?").
-- La opción 3 (o escribir "quiero un chatbot") levanta los **requerimientos de un chatbot** para el negocio del cliente: 8 preguntas, resumen final, aprobación y la opción de corregir campo por campo. Al aprobar, se registran los requerimientos en el log y se indica que un asesor lo contactará personalmente.
+- Al entrar a la demo responde con un saludo: `1. Realizar una cotización de útiles escolares` / `2. Comunicarme con Evelyn` / `3. Solicitar un Chatbot Inteligente para mi negocio`. El catálogo no está en el saludo: se muestra al pedirlo por palabra (ej. "catálogo", "qué tienes") o después de la opción 1 (pregunta "¿Deseas ver lo que tengo disponible?").
+- La opción 3 (o escribir "quiero un chatbot") levanta los **requerimientos de un chatbot** para el negocio del cliente: 8 preguntas (además del tipo de servicio de la primera pregunta del agente principal, que no se repite), resumen final, aprobación y la opción de corregir campo por campo. Al aprobar, se registran los requerimientos en el log y se indica que un asesor lo contactará personalmente.
 - El resto del flujo habla de forma natural (sin menús `1. Sí / 2. No`): se responde con "sí", "no", "domicilio", "retiro", el nombre de un producto, etc.
 - Con `1` o `sí`, el bot pide la lista: puede escribirla por mensaje (un producto por línea) o adjuntarla en **PDF o Excel**.
 - Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen con la cotización** (precio por ítem y total) y pregunta si desea realizar el pedido.
@@ -110,13 +94,16 @@ Cualquier persona que escriba al número recibe el flujo de útiles:
 - El chat se cierra por inactividad a los 14 minutos (aviso "¿Sigues ahí?" a los 5 min, y "El chat se cerrará por falta de respuesta." al cierre). Si la venta ya se concretó (comprobante enviado o retiro agendado) no se envían avisos.
 - El catálogo (Excel) se carga en memoria solo cuando se necesita (al entrar al flujo con la opción 1, ver el catálogo o consultar un producto); el saludo y la opción 2 no lo cargan.
 
+## IA opcional (Gemini)
+
+Si hay `GEMINI_API_KEY`, además del diálogo de servicios del **agente principal** (`askGeminiServices`), el flujo de útiles usa IA (modelo `GEMINI_MODEL`, default `gemini-3.1-flash-lite`) para el diálogo libre, el armado de listas, la revisión de disponibilidad y la verificación del comprobante con visión. Sin la clave, el bot funciona 100% con las reglas (el agente principal muestra un menú estático). El bot **nunca confía en la IA para los precios**: cada ítem se revalida contra el catálogo y las imágenes de cotización se arman con los datos reales.
+
 ## Archivos
 
-- `server.js` — servidor Express, verificación de firmas (Meta y YCloud), routing de ambos flujos, media (upload/descarga) y envío por YCloud o Graph API
-- `lib/excel.js` — carga y parseo de los `.xlsx` + validación de autorización + `normalize()`
-- `lib/search.js` — lógica del flujo de equipos (interpretación y generación de respuesta)
+- `server.js` — servidor Express, verificación de firmas (Meta y YCloud), routing del flujo de servicios/útiles, media (upload/descarga) y envío por YCloud o Graph API
+- `lib/excel.js` — carga del `.xlsx` (`loadWorkbook`) y `normalize()`
 - `lib/utiles.js` — catálogo de útiles, búsqueda `findItems`, parseo de listas/archivos, `buildPriceImage` (sharp) y `formatPrice`
-- `lib/store.js` — máquina de estados del flujo de útiles, caché por sesión y timers de inactividad
-- `Laptops.xlsx` — datos de equipos (se cachea al arrancar; se actualiza vía push a GitHub + redeploy)
-- `UtilesEscolares.xlsx` — catálogo de útiles (idem)
+- `lib/store.js` — agente principal (estado `SERVICIOS`), demo de útiles y máquina de estados por sesión, caché y timers de inactividad
+- `lib/ai.js` — integración opcional con Gemini (`isAiEnabled`, `askGemini` JSON, `askGeminiServices`, `buildCatalogContext`)
+- `UtilesEscolares.xlsx` — catálogo de útiles (se cachea al arrancar; se actualiza vía push a GitHub + redeploy)
 - `test-usability.mjs` — tests de usabilidad (ejecutar con `npm test`)

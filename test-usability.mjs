@@ -6,232 +6,10 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 
 process.env.IA_IMAGEN_REPLY_DELAY_MS = '10';
-import { loadWorkbook, getLaptops, getAuthorizedPhones, isAuthorized, normalize } from './lib/excel.js';
-import { generateReply, isActivationMessage, isDeactivationMessage } from './lib/search.js';
+import { loadWorkbook, normalize } from './lib/excel.js';
 import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildPriceSvg, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
 import { createUtilesStore, mergeListaRows } from './lib/store.js';
 import { buildCatalogContext } from './lib/ai.js';
-
-const EXCEL_PATH = process.env.EXCEL_PATH || './Laptops.xlsx';
-const wb = await loadWorkbook(EXCEL_PATH);
-const laptops = getLaptops(wb.getWorksheet('Laptos'));
-const phones = getAuthorizedPhones(wb.getWorksheet('Autorizacion'));
-
-const disponibles = laptops.filter((l) => normalize(l.estado) === 'disponible').length;
-const arrendados = laptops.filter((l) => normalize(l.estado) === 'arrendado').length;
-const sinSerial = laptops.filter((l) => normalize(l.serial) === '').length;
-
-function check(query, label, fn) {
-  test(`${label} (consulta: "${query}")`, () => {
-    const reply = generateReply(query, laptops);
-    console.log(`\n[consulta] "${query}"\n${reply}`);
-    fn(reply);
-  });
-}
-
-const hallazgos = [];
-
-test('datos cargados del Excel', () => {
-  assert.ok(laptops.length >= 1, 'debería haber equipos en la hoja Laptos');
-  assert.ok(phones.length >= 1, 'debería haber números en la hoja Autorizacion');
-});
-
-check('equipos disponibles', 'intent disponible', (r) => {
-  assert.match(r, /^Equipos disponibles \(\d+\):/);
-  assert.ok(r.includes(`Equipos disponibles (${disponibles}):`));
-  assert.ok(r.includes('PF2Z5CQE'));
-});
-
-check('equipos arrendados', 'intent arrendado', (r) => {
-  assert.match(r, /^Equipos arrendados \(\d+\):/);
-  assert.ok(r.includes(`Equipos arrendados (${arrendados}):`));
-  assert.ok(r.includes('Tetrapack'));
-});
-
-check('cuantos equipos hay', 'intent inventario (frase)', (r) => {
-  assert.ok(r.includes('Inventario actual:'));
-  assert.ok(r.includes(`Disponibles: ${disponibles}`));
-  assert.ok(r.includes(`Arrendados: ${arrendados}`));
-  assert.ok(r.includes(`Total: ${laptops.length}`));
-});
-
-check('inventario', 'intent inventario (palabra clave)', (r) => {
-  assert.ok(r.includes('Inventario actual:'));
-  assert.ok(r.includes(`Total: ${laptops.length}`));
-});
-
-check('serial 7D9J4M3', 'serial con palabra "serial"', (r) => {
-  assert.ok(r.includes('Resultado para serial 7D9J4M3:'));
-  assert.ok(r.includes('Dell Latitude 5420'));
-  assert.ok(r.includes('Mondeles'));
-});
-
-check('7D9J4M3', 'serial suelto', (r) => {
-  assert.ok(r.includes('Resultado para serial 7D9J4M3:'));
-  assert.ok(r.includes('Jose Becera'));
-});
-
-check('68SRN73', 'serial suelto (2)', (r) => {
-  assert.ok(r.includes('Resultado para serial 68SRN73:'));
-  assert.ok(r.includes('Luis Ceron'));
-});
-
-check('que equipo no tiene registrado el serial', 'intent sin serial', (r) => {
-  assert.ok(r.includes(`Equipos sin serial registrado (${sinSerial}):`));
-  assert.ok(r.includes('Lenovo Thinkpad'));
-});
-
-check('equipos sin serial', 'intent sin serial (variante)', (r) => {
-  assert.ok(r.includes(`Equipos sin serial registrado (${sinSerial}):`));
-});
-
-check('codigo 8', 'código de 1 dígito', (r) => {
-  assert.ok(r.includes('Resultado para codigo 8:'));
-  assert.ok(r.includes('Dell Latitude 5420'));
-});
-
-check('codigo 13', 'código de 2 dígitos', (r) => {
-  assert.ok(r.includes('Resultado para codigo 13:'));
-  assert.ok(r.includes('Lenovo Thinkpad 20S1SCG100'));
-});
-
-check('empresa Tetrapack', 'búsqueda por empresa', (r) => {
-  assert.ok(r.includes('Lenovo 20X6501R00'));
-  assert.ok(r.includes('Tetrapack'));
-});
-
-check('usuario Luis Ceron', 'búsqueda por usuario', (r) => {
-  assert.ok(r.includes('Dell Latitude 5410'));
-  assert.ok(r.includes('Luis Ceron'));
-});
-
-check('modelo Dell Latitude 5410', 'búsqueda por modelo', (r) => {
-  assert.match(r, /^Encontre \d+ coincidencia/);
-  assert.ok(r.includes('Dell Latitude 5410'));
-});
-
-check('caracteristicas 16gb', 'búsqueda por características', (r) => {
-  assert.match(r, /^Encontre \d+ coincidencia/);
-  assert.ok(r.includes('16Gb ram'));
-});
-
-check('estado disponible', 'búsqueda por estado', (r) => {
-  assert.ok(r.includes(`Equipos disponibles (${disponibles}):`));
-});
-
-check('dell', 'búsqueda por marca', (r) => {
-  assert.match(r, /^Encontre \d+ coincidencia/);
-  assert.ok(r.includes('Dell 3420'));
-  assert.ok(r.includes('coincidencia(s)'));
-});
-
-check('mercado libre', 'búsqueda por empresa', (r) => {
-  assert.match(r, /^Encontre \d+ coincidencia/);
-  assert.ok(r.includes('Mercado libre'));
-  assert.ok(r.includes('Juan Sebastian Reyes'));
-});
-
-check('Luis Ceron', 'búsqueda por usuario', (r) => {
-  assert.match(r, /^Encontre \d+ coincidencia/);
-  assert.ok(r.includes('Luis Ceron'));
-  assert.ok(r.includes('Cengage'));
-});
-
-check('¿CÚANTOS EQUIPOS HAY?', 'normalización mayúsculas/acentos', (r) => {
-  assert.ok(r.includes('Inventario actual:'));
-  assert.ok(r.includes(`Total: ${laptops.length}`));
-});
-
-check('xyzxyz qwerty', 'texto sin coincidencias', (r) => {
-  assert.ok(r.includes('No encontre informacion sobre eso'));
-});
-
-check('', 'texto vacío', (r) => {
-  assert.ok(r.includes('Puedo ayudarte'));
-});
-
-check('hola', 'saludo muestra ayuda', (r) => {
-  assert.ok(r.includes('Puedo ayudarte'));
-});
-
-check('equipos disponibles y arrendados', 'intent mixto lista ambos', (r) => {
-  assert.ok(r.includes(`Equipos disponibles (${disponibles}):`));
-  assert.ok(r.includes(`Equipos arrendados (${arrendados}):`));
-});
-
-check('lenovo', 'marca encuentra todos (incluye disponibles)', (r) => {
-  assert.ok(r.includes('Lenovo 20X6501R00'));
-  assert.ok(r.includes('PF2Z5CQE'));
-});
-
-test('autorización — número exacto', () => {
-  assert.equal(isAuthorized('593987695938', phones), true);
-});
-
-test('autorización — sufijo de 9 dígitos', () => {
-  assert.equal(isAuthorized('987695938', phones), true);
-});
-
-test('autorización — con formato +593', () => {
-  assert.equal(isAuthorized('+593 98 769 5938', phones), true);
-});
-
-test('autorización — segundo número exacto', () => {
-  assert.equal(isAuthorized('593995844888', phones), true);
-});
-
-test('autorización — 8 dígitos con cero inicial no coincide', () => {
-  assert.equal(isAuthorized('09544888', phones), false);
-});
-
-test('autorización — sufijo de 7 dígitos no coincide', () => {
-  assert.equal(isAuthorized('9954488', phones), false);
-});
-
-test('autorización — menos de 7 dígitos rechazado', () => {
-  assert.equal(isAuthorized('12345', phones), false);
-});
-
-test('autorización — número no listado rechazado', () => {
-  assert.equal(isAuthorized('999999999', phones), false);
-});
-
-test('activación — "Hola Bot"', () => {
-  assert.equal(isActivationMessage('Hola Bot'), true);
-});
-
-test('activación — minúsculas "hola bot"', () => {
-  assert.equal(isActivationMessage('hola bot'), true);
-});
-
-test('activación — frase que contiene "hola bot"', () => {
-  assert.equal(isActivationMessage('hola bot, buenos dias'), true);
-});
-
-test('activación — "hola" solo no activa', () => {
-  assert.equal(isActivationMessage('hola'), false);
-});
-
-test('activación — consulta normal no activa', () => {
-  assert.equal(isActivationMessage('equipos disponibles'), false);
-  assert.equal(isActivationMessage('cuantos equipos hay'), false);
-});
-
-test('desactivación — "chao bot"', () => {
-  assert.equal(isDeactivationMessage('chao bot'), true);
-});
-
-test('desactivación — mayúsculas "CHAO BOT!"', () => {
-  assert.equal(isDeactivationMessage('CHAO BOT!'), true);
-});
-
-test('desactivación — "chao" solo no desactiva', () => {
-  assert.equal(isDeactivationMessage('chao'), false);
-});
-
-test('desactivación — "hola bot" no desactiva', () => {
-  assert.equal(isDeactivationMessage('hola bot'), false);
-});
 
 // ===== FLUJO DE ÚTILES ESCOLARES =====
 
@@ -431,6 +209,7 @@ function makeStore(opts = {}) {
     sendText: async (to, body) => sent.push({ to, body }),
     sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
     log: () => {},
+    startInDemo: true,
     ...opts,
   });
   stores.push(store);
@@ -455,6 +234,7 @@ function makeIaCaptureStore(reply) {
     sendText: async (to, body) => sent.push({ to, body }),
     sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
     log: () => {},
+    startInDemo: true,
     ai: {
       isAiEnabled: () => true,
       buildCatalogContext,
@@ -476,6 +256,7 @@ function makeIaReceiptStore(reply, receiptReply) {
     sendText: async (to, body) => sent.push({ to, body }),
     sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
     log: () => {},
+    startInDemo: true,
     ai: {
       isAiEnabled: () => true,
       buildCatalogContext,
@@ -494,6 +275,7 @@ function makeIaSequenceStore(replies) {
     sendText: async (to, body) => sent.push({ to, body }),
     sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
     log: () => {},
+    startInDemo: true,
     ai: {
       isAiEnabled: () => true,
       buildCatalogContext,
@@ -512,6 +294,7 @@ function makeIaScriptedStore(script, receiptReply) {
     sendText: async (to, body) => sent.push({ to, body }),
     sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
     log: () => {},
+    startInDemo: true,
     ai: {
       isAiEnabled: () => true,
       buildCatalogContext,
@@ -558,6 +341,154 @@ function fechaHoy() {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+// ===== AGENTE PRINCIPAL (venta de agentes / apps / páginas web / automatización) =====
+
+function makeServicesStore(replies = [], opts = {}) {
+  const sent = [];
+  const logLines = [];
+  const store = createUtilesStore({
+    getProducts: async () => utiles,
+    sendText: async (to, body) => sent.push({ to, body }),
+    sendImage: async (to, buffer) => sent.push({ to, image: buffer }),
+    log: (m) => logLines.push(String(m)),
+    ai: {
+      isAiEnabled: () => true,
+      buildServicesSystem: () => 'system servicios',
+      askGeminiServices: async () => (replies.length ? replies.shift() : { reply: 'Entendido. ¿Algo más?' }),
+    },
+    ...opts,
+  });
+  stores.push(store);
+  return { store, sent, logLines };
+}
+
+test('agente principal — el primer mensaje envía el menú de servicios (sin IA)', async () => {
+  const { store, sent } = makeServicesStore([], { ai: { isAiEnabled: () => false } });
+  const from = '59398000001';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  const body = sent.find((m) => m.body).body;
+  assert.ok(body.includes('agentes de WhatsApp con IA'), 'debe presentar los servicios');
+  assert.ok(body.includes('Ver una DEMO de un agente de ventas de útiles escolares'), 'debe ofrecer la demo');
+  assert.ok(body.includes('Evelyn'), 'debe ofrecer contacto humano');
+  assert.equal(store.getState(from), 'SERVICIOS');
+});
+
+test('agente principal — la opción 1 inicia la demo de útiles y "salir de la demo" vuelve al menú', async () => {
+  const { store, sent } = makeServicesStore([], { ai: { isAiEnabled: () => false } });
+  const from = '59398000002';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  const lastTwo = sent.slice(-2).map((m) => m.body).join('\n');
+  assert.ok(lastTwo.includes('demo real de un agente de ventas de útiles escolares'), 'debe mostrar el intro de la demo');
+  assert.ok(lastTwo.includes('Realizar una cotización de útiles escolares'), 'debe mostrar el saludo del agente en demo');
+  assert.equal(store.getState(from), 'SALUDO');
+
+  await store.handleMessage(from, { type: 'text', text: 'salir de la demo' });
+  const finalMsg = sent[sent.length - 1].body;
+  assert.ok(finalMsg.includes('Ver una DEMO de un agente'), 'debe volver al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
+});
+
+test('agente principal — pedir ver la demo también la inicia desde el menú principal', async () => {
+  const { store, sent } = makeServicesStore();
+  const from = '59398000003';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'quiero ver una demo de un agente que vende útiles escolares' });
+  assert.ok(sent[sent.length - 1].body.includes('Realizar una cotización de útiles escolares'));
+  assert.equal(store.getState(from), 'SALUDO');
+});
+
+test('agente principal — en la demo la opción 2 (Evelyn) vuelve al menú y no queda en silencio', async () => {
+  const { store, sent } = makeServicesStore();
+  const from = '59398000004';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  assert.equal(store.getState(from), 'SERVICIOS', 'no debe quedar en DESACTIVADO');
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'debe volver al menú principal');
+});
+
+test('agente principal — la demo termina sola al llegar a un cierre natural y vuelve al menú', async () => {
+  const { store, sent } = makeServicesStore();
+  const from = '59398000005';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'asesor' });
+  assert.equal(store.getState(from), 'ASESOR');
+  await store.handleMessage(from, { type: 'text', text: 'gracias' });
+  assert.equal(store.getState(from), 'SERVICIOS', 'el cierre de la demo debe volver al menú principal');
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'));
+});
+
+test('agente principal — el diálogo de venta usa Gemini y respeta ir_demo', async () => {
+  const replies = [
+    { reply: '¡Hola! ¿Quieres una demo de nuestro agente de ventas?', ir_demo: false },
+    { reply: '¡Claro! Te la muestro ahora.', ir_demo: true },
+  ];
+  const { store, sent } = makeServicesStore(replies);
+  const from = '59398000006';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  assert.ok(sent[sent.length - 1].body.includes('demo de nuestro agente'), 'debe responder por Gemini');
+  assert.equal(store.getState(from), 'SERVICIOS');
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  const lastTwo = sent.slice(-3).map((m) => m.body).join('\n');
+  assert.ok(lastTwo.includes('Te la muestro ahora'), 'debe enviar la respuesta de Gemini antes de la demo');
+  assert.ok(lastTwo.includes('Realizar una cotización de útiles escolares'), 'debe entrar a la demo');
+  assert.equal(store.getState(from), 'SALUDO');
+});
+
+test('agente principal — el formulario de requerimientos empieza con el tipo de servicio', async () => {
+  const { store, sent } = makeServicesStore([], { ai: { isAiEnabled: () => false } });
+  const from = '59398000007';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  const body = sent[sent.length - 1].body;
+  assert.ok(body.includes('tipo de servicio'), 'la primera pregunta debe ser el tipo de servicio');
+  assert.ok(body.includes('Agente de WhatsApp'), 'debe listar los tipos de servicio');
+  assert.equal(store.getState(from), 'CHATBOT');
+});
+
+test('agente principal — formulario de servicio completo registra los requerimientos y cierra la sesión', async () => {
+  const { store, sent, logLines } = makeServicesStore([], { ai: { isAiEnabled: () => false } });
+  const from = '59398000008';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '2' });
+  const answers = ['1', 'Mi Tienda', 'Utiles y cuadernos', 'WhatsApp', 'Cotizar y vender', '20', 'Excel', 'Español', 'Carlos, 9-5'];
+  for (const a of answers) {
+    await store.handleMessage(from, { type: 'text', text: a });
+  }
+  await store.handleMessage(from, { type: 'text', text: 'sí' });
+  assert.ok(sent[sent.length - 1].body.includes('Un asesor se pondrá en contacto'), 'debe confirmar el registro');
+  assert.ok(logLines.some((l) => l.includes('REQUERIMIENTOS SERVICIO de')), 'debe registrar los requerimientos');
+  assert.equal(store.getState(from), undefined, 'el chat de servicios debe cerrar la sesión al aprobar');
+});
+
+test('agente principal — la opción 3 pasa el chat a Evelyn (sin IA)', async () => {
+  const { store, sent } = makeServicesStore([], { ai: { isAiEnabled: () => false } });
+  const from = '59398000009';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '3' });
+  assert.ok(sent[sent.length - 1].body.includes('Evelyn chateará contigo'));
+  assert.equal(store.getState(from), 'DESACTIVADO');
+});
+
+test('agente principal — "quiero una página web" abre directamente el formulario', async () => {
+  const { store } = makeServicesStore([], { ai: { isAiEnabled: () => false } });
+  const from = '59398000010';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'quiero una página web para mi negocio' });
+  assert.equal(store.getState(from), 'CHATBOT');
+});
+
+test('agente principal — las imágenes en el menú principal piden texto', async () => {
+  const { store, sent } = makeServicesStore();
+  const from = '59398000011';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'image', mimeType: 'image/jpeg', data: Buffer.from('abc') });
+  assert.ok(sent[sent.length - 1].body.includes('Por ahora solo respondo por texto'));
+  assert.equal(store.getState(from), 'SERVICIOS');
+});
+
 test('útiles — saludo inicial muestra las 3 opciones (sin catálogo, sin asesor)', async () => {
   const { store, sent } = makeStore();
   await store.handleMessage('59399990001', { type: 'text', text: 'hola' });
@@ -576,7 +507,8 @@ test('útiles — opción 3: chatbot, recolecta requerimientos, resumen y cierre
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '3' });
   assert.equal(store.getState(from), 'CHATBOT');
-  assert.ok(sent[sent.length - 1].body.includes('nombre de tu negocio'), 'debe arrancar con la primera pregunta');
+  assert.ok(sent[sent.length - 1].body.includes('tipo de servicio'), 'debe arrancar con la primera pregunta');
+  await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'Mi papelería El Estudiante, venta de útiles' });
   await store.handleMessage(from, { type: 'text', text: 'cuadernos, mochilas y uniformes' });
   await store.handleMessage(from, { type: 'text', text: 'WhatsApp e Instagram' });
@@ -588,12 +520,13 @@ test('útiles — opción 3: chatbot, recolecta requerimientos, resumen y cierre
   assert.equal(store.getState(from), 'CHATBOT_CONFIRMA');
   const summary = sent.filter((m) => m.body).pop().body;
   assert.ok(summary.includes('RESUMEN DE TUS REQUERIMIENTOS'), 'debe enviar el resumen');
+  assert.ok(summary.includes('Tipo de servicio'), 'debe incluir el tipo de servicio');
   assert.ok(summary.includes('Mi papelería El Estudiante'), 'debe incluir la respuesta del negocio');
   assert.ok(summary.includes('María, en la tarde'), 'debe incluir la respuesta de contacto');
   assert.ok(summary.includes('¿Estás de acuerdo'), 'debe pedir la aprobación');
   await store.handleMessage(from, { type: 'text', text: 'sí' });
   assert.ok(sent.some((m) => m.body && m.body.includes('asesor se pondrá en contacto')), 'debe avisar del contacto del asesor');
-  assert.equal(store.getState(from), undefined, 'la sesión debe cerrarse');
+  assert.equal(store.getState(from), 'SERVICIOS', 'en la demo, al cerrar el formulario vuelve al menú principal');
 });
 
 test('útiles — opción 3: se pueden corregir los campos del resumen', async () => {
@@ -601,6 +534,7 @@ test('útiles — opción 3: se pueden corregir los campos del resumen', async (
   const from = '59399990151';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'Mi negocio' });
   await store.handleMessage(from, { type: 'text', text: 'productos' });
   await store.handleMessage(from, { type: 'text', text: 'WhatsApp' });
@@ -613,14 +547,14 @@ test('útiles — opción 3: se pueden corregir los campos del resumen', async (
   assert.equal(store.getState(from), 'CHATBOT_EDITAR');
   const list = sent.filter((m) => m.body).pop().body;
   assert.ok(list.includes('Canales de atención actuales'), 'debe listar los campos');
-  await store.handleMessage(from, { type: 'text', text: '3' });
+  await store.handleMessage(from, { type: 'text', text: '4' });
   assert.ok(sent[sent.length - 1].body.includes('nuevo valor para «Canales de atención actuales»'), 'debe pedir el nuevo valor');
   await store.handleMessage(from, { type: 'text', text: 'Instagram y TikTok' });
   assert.equal(store.getState(from), 'CHATBOT_CONFIRMA');
   const summary = sent.filter((m) => m.body).pop().body;
   assert.ok(summary.includes('Instagram y TikTok'), 'el resumen debe reflejar el campo corregido');
   await store.handleMessage(from, { type: 'text', text: 'sí' });
-  assert.equal(store.getState(from), undefined);
+  assert.equal(store.getState(from), 'SERVICIOS', 'en la demo, al cerrar el formulario vuelve al menú principal');
 });
 
 test('útiles — "quiero un chatbot" en texto libre arranca el flujo', async () => {
@@ -629,7 +563,7 @@ test('útiles — "quiero un chatbot" en texto libre arranca el flujo', async ()
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'quiero un chatbot para mi negocio' });
   assert.equal(store.getState(from), 'CHATBOT');
-  assert.ok(sent[sent.length - 1].body.includes('nombre de tu negocio'));
+  assert.ok(sent[sent.length - 1].body.includes('tipo de servicio'));
 });
 
 test('útiles IA — opción 3 (chatbot) arranca el flujo sin pasar por Gemini', async () => {
@@ -638,57 +572,54 @@ test('útiles IA — opción 3 (chatbot) arranca el flujo sin pasar por Gemini',
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: '3' });
   assert.equal(store.getState(from), 'CHATBOT');
-  assert.ok(sent[sent.length - 1].body.includes('nombre de tu negocio'), 'debe preguntar sin usar la IA');
+  assert.ok(sent[sent.length - 1].body.includes('tipo de servicio'), 'debe preguntar sin usar la IA');
 });
 
-test('útiles — "no" en saludo pasa el chat a Evelyn y el bot queda en silencio', async () => {
+test('útiles — "no" en saludo pasa a Evelyn pero en la demo vuelve al menú principal', async () => {
   const { store, sent } = makeStore();
   const from = '59399990004';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'no' });
   const last = sent[sent.length - 1].body;
-  assert.ok(last.includes('Evelyn chateará contigo'), 'debe indicar que Evelyn toma la conversación');
-  assert.equal(store.getState(from), 'DESACTIVADO');
+  assert.ok(last.includes('Ver una DEMO de un agente'), 'debe volver al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
   const count = sent.length;
-  await store.handleMessage(from, { type: 'text', text: 'necesito ayuda' });
-  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+  await store.handleMessage(from, { type: 'text', text: 'hola, seguimos?' });
+  assert.equal(sent.length, count + 1, 'el bot debe seguir respondiendo en el menú principal');
   await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+  assert.equal(store.getState(from), 'SALUDO', 'la opción 1 vuelve a iniciar la demo');
 });
 
-test('útiles IA — "no" en saludo también pasa el chat a Evelyn y queda en silencio', async () => {
+test('útiles IA — "no" en saludo pasa a Evelyn pero en la demo vuelve al menú principal', async () => {
   const { store, sent } = makeIaStore({ reply: 'no debería usarse' });
   const from = '59399990131';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'no' });
   const last = sent[sent.length - 1].body;
-  assert.ok(last.includes('Evelyn chateará contigo'), 'debe indicar que Evelyn toma la conversación');
-  assert.equal(store.getState(from), 'DESACTIVADO');
+  assert.ok(last.includes('Ver una DEMO de un agente'), 'debe volver al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
   const count = sent.length;
   await store.handleMessage(from, { type: 'text', text: 'hola, necesito una mochila' });
-  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+  assert.equal(sent.length, count + 1, 'el bot debe seguir respondiendo en el menú principal');
 });
 
-test('útiles — "necesito comunicarme con Evelyn" pasa el chat a Evelyn y queda en silencio', async () => {
+test('útiles — "necesito comunicarme con Evelyn" pasa a Evelyn pero en la demo vuelve al menú', async () => {
   const { store, sent } = makeStore();
   const from = '59399990051';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'Necesito comunicarme con Evelyn' });
   const last = sent[sent.length - 1].body;
-  assert.ok(last.includes('Evelyn chateará contigo'), 'debe indicar que Evelyn toma la conversación');
-  assert.equal(store.getState(from), 'DESACTIVADO');
-  const count = sent.length;
-  await store.handleMessage(from, { type: 'text', text: 'hola, seguimos?' });
-  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+  assert.ok(last.includes('Ver una DEMO de un agente'), 'debe volver al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
-test('útiles — "quiero hablar con Evelyn" también pasa el chat a Evelyn', async () => {
+test('útiles — "quiero hablar con Evelyn" también vuelve al menú principal', async () => {
   const { store, sent } = makeStore();
   const from = '59399990052';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'quiero hablar con Evelyn' });
-  assert.ok(sent[sent.length - 1].body.includes('Evelyn chateará contigo'));
-  assert.equal(store.getState(from), 'DESACTIVADO');
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'));
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
 test('útiles — "quién es Evelyn" NO pasa el chat a Evelyn (sigue en saludo)', async () => {
@@ -708,6 +639,7 @@ test('útiles — el catálogo se carga en memoria solo al entrar al flujo (opci
     sendText: async (to, body) => sent.push({ to, body }),
     sendImage: async () => {},
     log: () => {},
+    startInDemo: true,
   });
   stores.push(store);
   const from = '59399990054';
@@ -727,12 +659,13 @@ test('útiles — la opción 2 (Evelyn) y la palabra "asesor" no cargan el catá
     sendText: async () => {},
     sendImage: async () => {},
     log: () => {},
+    startInDemo: true,
   });
   stores.push(store);
   await store.handleMessage('59399990055', { type: 'text', text: 'hola' });
   await store.handleMessage('59399990055', { type: 'text', text: '2' });
   assert.equal(calls, 0, 'la opción 2 no debe cargar el catálogo');
-  assert.equal(store.getState('59399990055'), 'DESACTIVADO');
+  assert.equal(store.getState('59399990055'), 'SERVICIOS', 'en la demo vuelve al menú principal');
 
   await store.handleMessage('59399990056', { type: 'text', text: 'hola' });
   await store.handleMessage('59399990056', { type: 'text', text: 'asesor' });
@@ -740,16 +673,16 @@ test('útiles — la opción 2 (Evelyn) y la palabra "asesor" no cargan el catá
   assert.equal(store.getState('59399990056'), 'ASESOR');
 });
 
-test('útiles IA — "necesito comunicarme con Evelyn" también pasa el chat a Evelyn', async () => {
+test('útiles IA — "necesito comunicarme con Evelyn" también vuelve al menú principal', async () => {
   const { store, sent } = makeIaStore({ reply: 'no debería usarse' });
   const from = '59399990132';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'necesito comunicarme con evelyn' });
-  assert.ok(sent[sent.length - 1].body.includes('Evelyn chateará contigo'));
-  assert.equal(store.getState(from), 'DESACTIVADO');
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'debe volver al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
   const count = sent.length;
   await store.handleMessage(from, { type: 'text', text: 'quiero una mochila' });
-  assert.equal(sent.length, count, 'el bot no debe responder más mensajes');
+  assert.equal(sent.length, count + 1, 'el bot debe seguir respondiendo en el menú principal');
 });
 
 test('útiles — "catálogo" envía el catálogo y pide números', async () => {
@@ -791,25 +724,27 @@ test('útiles — números válidos piden cantidad de cada uno y muestran el men
   assert.equal(sel.length, 2);
 });
 
-test('útiles — palabra "asesor": gracias desactiva', async () => {
+test('útiles — palabra "asesor": gracias cierra y vuelve al menú principal', async () => {
   const { store, sent } = makeStore();
   const from = '59399990034';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'asesor' });
   assert.equal(store.getState(from), 'ASESOR');
   await store.handleMessage(from, { type: 'text', text: 'gracias' });
-  assert.ok(sent[sent.length - 1].body.includes('en cuanto esté lista la cotización'));
-  assert.equal(store.getState(from), undefined);
+  assert.ok(sent.some((m) => m.body && m.body.includes('en cuanto esté lista la cotización')));
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
-test('útiles — palabra "asesor": documento cierra la sesión', async () => {
+test('útiles — palabra "asesor": documento cierra y vuelve al menú principal', async () => {
   const { store, sent } = makeStore();
   const from = '59399990035';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'asesor' });
   await store.handleMessage(from, { type: 'document', data: Buffer.from('x'), filename: 'lista.pdf' });
-  assert.ok(sent[sent.length - 1].body.includes('Un asesor revisará tu documento'));
-  assert.equal(store.getState(from), undefined);
+  assert.ok(sent.some((m) => m.body && m.body.includes('Un asesor revisará tu documento')));
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
 test('útiles — palabra "asesor": otro texto re-pregunta', async () => {
@@ -928,8 +863,9 @@ test('útiles — pedido por retiro: comprobante, viernes y despedida', async ()
   assert.ok(sent[sent.length - 1].body.includes('estará listo el día viernes'));
   assert.equal(store.getState(from), 'PICKUP_AGENDA');
   await store.handleMessage(from, { type: 'text', text: 'mañana a las 9am' });
-  assert.ok(sent[sent.length - 1].body.includes('nos vemos el viernes'));
-  assert.equal(store.getState(from), undefined);
+  assert.ok(sent.some((m) => m.body && m.body.includes('nos vemos el viernes')));
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
 test('útiles — pedido con entrega a domicilio completa', async () => {
@@ -958,8 +894,9 @@ test('útiles — pedido con entrega a domicilio completa', async () => {
   assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
   await store.handleMessage(from, { type: 'image' });
   await store.handleMessage(from, { type: 'text', text: 'gracias' });
-  assert.ok(sent[sent.length - 1].body.includes('motorizado'));
-  assert.equal(store.getState(from), undefined);
+  assert.ok(sent.some((m) => m.body && m.body.includes('motorizado')));
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
 test('útiles — abandonar el pedido de entrega cierra la sesión', async () => {
@@ -978,8 +915,9 @@ test('útiles — abandonar el pedido de entrega cierra la sesión', async () =>
   await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
   await store.handleMessage(from, { type: 'text', text: 'Juan Perez' });
   await store.handleMessage(from, { type: 'text', text: '2' });
-  assert.ok(sent[sent.length - 1].body.includes('Quedamos a tus órdenes'));
-  assert.equal(store.getState(from), undefined);
+  assert.ok(sent.some((m) => m.body && m.body.includes('Quedamos a tus órdenes')));
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
 test('útiles — lista por texto se procesa por ítem y difiere la cotización', async () => {
@@ -1336,7 +1274,8 @@ test('útiles IA — flujo natural completo: opciones, accesorios, entrega con r
   assert.ok(payMsg.body.includes('Evelyn Lizeth Zambrano'), 'debe indicar el titular');
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
   assert.ok(sent.some((m) => m.body && m.body.includes('Verificamos tu comprobante')), 'debe agradecer tras verificar');
-  assert.equal(store.getState(from), undefined, 'debe cerrar la sesión');
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS', 'en la demo, al cerrar la venta vuelve al menú principal');
 });
 
 test('útiles — buildPriceImage incluye el recargo por entrega a domicilio', async () => {
@@ -1366,7 +1305,8 @@ test('útiles IA — comprobante válido con IA: agradece y cierra la sesión', 
   await store.handleMessage(from, { type: 'image', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', filename: 'comprobante.png' });
   assert.ok(sent.some((m) => m.body && m.body.includes('Verificamos tu comprobante')), 'debe agradecer tras verificar');
   assert.ok(sent.some((m) => m.body && m.body.includes('1.25')), 'debe mencionar el monto verificado');
-  assert.equal(store.getState(from), undefined, 'la sesión debe cerrarse');
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS', 'en la demo, al cerrar la venta vuelve al menú principal');
 });
 
 test('útiles IA — comprobante inválido con IA: avisa el detalle y sigue esperando', async () => {
@@ -1525,13 +1465,14 @@ test('útiles — el pedido por retiro indica el monto exacto del anticipo', asy
   assert.ok(lastMsg.body.includes('Evelyn Lizeth Zambrano'), 'debe indicar el titular');
 });
 
-test('útiles IA — despedirse cierra la sesión', async () => {
+test('útiles IA — despedirse cierra y vuelve al menú principal', async () => {
   const { store, sent } = makeIaStore({ reply: '¡Hasta luego!', despedirse: true });
   const from = '59399990104';
   await store.handleMessage(from, { type: 'text', text: 'hola' });
   await store.handleMessage(from, { type: 'text', text: 'chao' });
-  assert.equal(store.getState(from), undefined);
-  assert.ok(sent.some((m) => m.body.includes('Hasta luego')));
+  assert.ok(sent.some((m) => m.body && m.body.includes('Hasta luego')));
+  assert.ok(sent[sent.length - 1].body.includes('Ver una DEMO de un agente'), 'en la demo vuelve al menú principal');
+  assert.equal(store.getState(from), 'SERVICIOS');
 });
 
 test('útiles IA — fallo de Gemini no rompe el chat', async () => {

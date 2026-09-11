@@ -1,7 +1,7 @@
 {
   "name": "pc-venta-wa-bot",
-  "version": "1.0.0",
-  "description": "Bot de WhatsApp que responde preguntas sobre laptops consultando un Excel alojado en OneDrive",
+  "version": "1.1.0",
+  "description": "Bot de WhatsApp para la venta de útiles escolares leyendo un catálogo en UtilesEscolares.xlsx",
   "type": "module",
   "main": "server.js",
   "scripts": {
