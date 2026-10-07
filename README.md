@@ -1,109 +1,126 @@
-# Bot WhatsApp de venta de útiles escolares
+# Chatbot IA para Ventas por WhatsApp Business
 
-Bot de WhatsApp que atiende (sin autorización, público) el flujo de **venta de útiles escolares** leyendo un catálogo en `UtilesEscolares.xlsx`: cota listas de útiles, muestra precios con imagen y registra pedidos.
+Agente de WhatsApp con IA que vende servicios digitales y demuestra la venta automática con una demo real de útiles escolares.
 
-Además, el **primer mensaje** entra al **agente principal**, que vende los servicios de desarrollo (agentes de WhatsApp, apps web y páginas web). El diálogo lo lleva Gemini; las opciones del menú son `1. Ver una DEMO de un agente de ventas` / `2. Comunicarme con Evelyn` / `3. Solicitar una APP, Página web o Chatbot`. El flujo de útiles escolares quedó como **demo** que se abre con la opción 1 (o diciendo "demo") y, al cerrarse, **vuelve siempre al menú principal**.
+![Node.js](https://img.shields.io/badge/Node.js-20+-339933?logo=node.js&logoColor=white)
+![Express](https://img.shields.io/badge/Express-4-000000?logo=express&logoColor=white)
+![Gemini](https://img.shields.io/badge/Gemini-3.1_flash_lite-4285F4?logo=google&logoColor=white)
+![WhatsApp](https://img.shields.io/badge/WhatsApp-Business-25D366?logo=whatsapp&logoColor=white)
+![YCloud](https://img.shields.io/badge/YCloud-BSP-111827)
+![Render](https://img.shields.io/badge/Render-Deployed-46E3B7?logo=render&logoColor=white)
 
-> Histórico: este bot era una consulta de equipos (laptops) + útiles escolares. El flujo de equipos fue eliminado; queda solo el de útiles.
+## 🎬 Demo visual
 
-**Producción**: desplegado en Render en `https://pc-venta-ia.onrender.com`, con YCloud como proveedor (BSP) para recibir/enviar mensajes. El endpoint del webhook es permanente y **no cambia**: `https://pc-venta-ia.onrender.com/webhook`.
+> [COMPLETAR: subir un GIF de 30 segundos a `docs/demo.gif` y reemplazar este bloque]
 
-### Estructura de `UtilesEscolares.xlsx`
+![Demo del chatbot](docs/demo.gif)
 
-| Hoja | Contenido |
-|---|---|
-| `Hoja1` | Fila 1 encabezado `Producto | Descripcion | Precio de venta al publico`; desde fila 2 los ~59 productos |
+Flujo sugerido para la grabación: menú principal → opción 1 (demo) → envío de lista → imagen de cotización → confirmación del pedido. Sin métricas aún.
 
-- Los precios se leen de la columna cuyo encabezado normalizado sea `precio de venta al publico` (tolera mayúsculas, acentos, NBSP y espacios finales).
-- Este catálogo es de uso público: cualquier persona que escriba al bot puede cotizar.
-- El catálogo se carga en memoria solo cuando se necesita (al entrar al flujo, ver el catálogo o consultar un producto); el saludo y la opción Evelyn no lo cargan.
+## ❓ Problema que resuelve
 
-## Despliegue en Render (producción)
+Las PYMES pierden ventas por no responder a tiempo en WhatsApp: los clientes preguntan fuera de horario, piden cotizaciones en texto o PDF y nadie les da un precio claro en minutos. Además, muchos negocios quieren un agente propio pero no pueden ver antes cómo trabajaría.
 
-1. Código en un repositorio de GitHub **privado**. NO subir `node_modules/` ni `.env`.
-2. En [render.com](https://render.com): **New → Web Service** → conectar el repo.
-3. Configuración:
-   - Build Command: `npm install`
-   - Start Command: `npm start`
-   - Región: `Virginia` (o `Ohio`); instancia `Free`.
-4. Variables de entorno en el dashboard de Render (**no** en un `.env`):
-   - `YCLOUD_API_KEY` — API key de YCloud
-   - `YCLOUD_PHONE` — número de negocio en E.164 (ej: `+593987695938`)
-   - `YCLOUD_WEBHOOK_SECRET` — secreto del endpoint webhook de YCloud
-   - `UTILES_PATH` — ruta del catálogo de útiles (default `./UtilesEscolares.xlsx`)
-   - Render asigna `PORT` automáticamente (default 10000); `server.js` ya lo usa.
-5. El servicio queda en `https://<nombre>.onrender.com`.
+## 💡 Solución
 
-### Configurar el webhook en YCloud
+Un agente principal que atiende en español 24/7, explica servicios digitales (agentes de WhatsApp con IA, apps y páginas web) y, cuando el cliente quiere verlo en acción, abre una demo real de ventas: cotiza listas de útiles desde texto, PDF o Excel, revalida cada precio contra el catálogo y genera la cotización en imagen. Al cerrar la demo, siempre vuelve al menú principal.
 
-1. Endpoint URL: `https://<nombre>.onrender.com/webhook`
-2. Evento: `whatsapp.inbound_message.received`
-3. Signing secret: el mismo valor de `YCLOUD_WEBHOOK_SECRET` (debe coincidir exacto en YCloud y en Render).
-4. El servidor verifica la firma `YCloud-Signature` (`t=<ts>,s=<hex>`, HMAC-SHA256 sobre `<ts>.<body>`). Un POST sin firma válida recibe `401`.
+## ✨ Características principales
 
-### Mantener el plan free despierto
+- Menú de servicios con IA (Gemini) y fallback por reglas sin clave.
+- Demo de ventas on-demand con entrada y salida controladas.
+- Cotizador de listas: texto multilínea, PDF y Excel, con tolerancia a tildes y NBSP.
+- Cotización en imagen (5 columnas en modo lista) y catálogo en imagen.
+- Cálculo de anticipo del 50% y verificación de comprobante con visión.
+- Handoff a humano (Evelyn) y cierre por inactividad a los 14 minutos.
+- Formulario de requerimientos de 9 campos con resumen aprobable y editable.
+- Sesiones persistibles en archivo, rate-limit, firmas YCloud/Meta y `/health`.
 
-Render free duerme tras ~15 min de inactividad. Configurar un monitor gratuito en **UptimeRobot** con GET a `https://<nombre>.onrender.com/` cada 5 minutos. Para garantía total, usar el plan de $7/mes.
+## 🛠️ Stack tecnológico
 
-## Cómo se actualizan los datos del Excel
+- **Backend:** Node.js (>=20, ESM), Express 4, helmet, express-rate-limit.
+- **IA:** Google Gemini (`gemini-3.1-flash-lite` por defecto) vía `fetch` nativo, respuestas JSON con schema.
+- **Mensajería:** WhatsApp vía YCloud BSP, fallback a Meta Graph API.
+- **Datos:** Excel (`exceljs`, `UtilesEscolares.xlsx` ~59 productos), PDF (`pdf-parse`), imágenes (`sharp`).
+- **DevOps:** Render Web Service, variables en dashboard, `node --test`.
 
-El servidor lee `UtilesEscolares.xlsx` al arrancar y lo cachea durante toda la vida del proceso. Para reflejar cambios:
+## 🏗️ Arquitectura
 
-1. Editar el archivo `.xlsx` localmente.
-2. Subir el archivo actualizado a GitHub (rama `main`) — el nombre debe seguir siendo `UtilesEscolares.xlsx`.
-3. Render redeploya automáticamente con cada push y el bot usa los datos nuevos.
+Flujo en texto: `YCloud (whatsapp.inbound_message.received) → Express POST /webhook → verificación HMAC → runSerialized por remitente → utilesStore (SERVICIOS → demo) → Gemini (JSON) → revalidación contra catálogo → YCloud send text/image`.
 
-El endpoint de YCloud **no cambia** en este ciclo.
+Diagrama sugerido (Mermaid): crear `docs/architecture.mmd` con nodos `Cliente → YCloud → API → Store → Gemini/Catálogo → YCloud → Cliente`, más rama `Render + UptimeRobot → /health`.
 
-## Desarrollo local
+## 🚀 Instalación y uso
 
-1. Instalar dependencias: `npm install`.
-2. Copiar `.env.example` a `.env` y completar `YCLOUD_API_KEY`, `YCLOUD_PHONE`, `YCLOUD_WEBHOOK_SECRET`.
-3. Arrancar: `npm start` → queda en el puerto 3000.
-4. Para probar el webhook en local con HTTPS, usar un túnel efímero:
+1. Clonar y entrar al proyecto:
+   ```bash
+   git clone [COMPLETAR: url-del-repo] pc-venta-ia
+   cd pc-venta-ia
+   npm install
    ```
-   cloudflared tunnel --url http://localhost:3000
+2. Copiar variables:
+   ```bash
+   cp .env.example .env
    ```
-   y apuntar el webhook de YCloud a `https://<url-del-tunel>/webhook`. Ojo: esa URL cambia en cada reinicio; solo sirve para desarrollo.
+3. Completar `.env` mínimo:
+   ```env
+   PORT=3000
+   UTILES_PATH=./UtilesEscolares.xlsx
+   VERIFY_TOKEN=cambia-este-token
+   YCLOUD_API_KEY=
+   YCLOUD_PHONE=+593987695938
+   YCLOUD_WEBHOOK_SECRET=
+   GEMINI_API_KEY=
+   GEMINI_MODEL=gemini-3.1-flash-lite
+   DOMICILIO_RECARGO=3
+   SESSION_FILE=./data/sessions.json
+   ```
+4. Arrancar y probar:
+   ```bash
+   npm start
+   npm test
+   ```
+5. Webhook local con túnel: `cloudflared tunnel --url http://localhost:3000` y apuntar YCloud a `https://<tunel>/webhook`. En producción el endpoint es `https://[COMPLETAR: tu-app].onrender.com/webhook`.
 
-Sin `YCLOUD_API_KEY`/`PHONE_NUMBER_ID` configurados, las respuestas solo se loguean en consola (modo desarrollo).
+## 📁 Estructura del proyecto
 
-## Consultas que entiende el bot
+```text
+pc-venta-ia/
+├── server.js              # Express, firmas, media, envío, /health
+├── lib/
+│   ├── store.js           # Orquestador de estados (SERVICIOS → demo)
+│   ├── messages.js        # Textos y constantes
+│   ├── intents.js         # Regex de intenciones
+│   ├── cart.js            # Carrito y totales
+│   ├── chatbotForm.js     # Formulario 9 campos
+│   ├── sessionStore.js    # Sesiones memoria/archivo
+│   ├── ai.js              # Gemini JSON + visión
+│   ├── utiles.js          # Catálogo, búsqueda, imágenes precio
+│   └── excel.js           # Carga .xlsx + normalize
+├── UtilesEscolares.xlsx   # Catálogo (~59 productos)
+├── test-usability.mjs     # Tests (145 pass / 1 fail conocido)
+└── .env.example
+```
 
-El **primer mensaje** de cualquier persona abre el **menú principal** (agente de servicios):
+## 🗺️ Roadmap
 
-- Se ofrece `1. Ver una DEMO de un agente de ventas` / `2. Comunicarme con Evelyn` / `3. Solicitar una APP, Página web o Chatbot para tu negocio`.
-- Con `GEMINI_API_KEY`, el diálogo de servicios lo maneja Gemini (sin IA se responde con un menú estático); los JSON que puede devolver son `ir_demo`, `formulario` (arranca el formulario de requerimientos), `evelyn`, `despedirse` y `requerimientos`.
-- La **opción 1** (o palabras como "demo") inicia la **demo** del agente de útiles escolares: streaming del comportamiento real del bot. Al terminar la demo (compra confirmada, despedida, pasar a Evelyn, etc.) se envía un aviso de cierre y se **vuelve al menú principal**.
-- La **opción 2** (o "necesito comunicarme con Evelyn") pasa la conversación del cliente a la humana Evelyn.
-- La **opción 3** (o un texto con "chatbot") abre un **formulario de requerimientos** cuya primera pregunta es el tipo de servicio (Agente de WhatsApp / App web / Página web) seguida de 8 preguntas de negocio; al final hay un resumen aprobable y editable campo por campo. Al aprobar, los requerimientos se registran en el log y un asesor contacta al cliente.
-- "Salir de la demo", "volver al menú principal" o "terminar la demo" salen de la demo hacia el menú en cualquier momento.
-- Dentro de la demo, el agente de útiles responde con el flujo de abajo.
+- [x] Agente principal de servicios con Gemini + fallback.
+- [x] Demo de útiles on-demand con retorno al menú.
+- [x] Cotizador PDF/Excel con imagen y anticipo 50%.
+- [x] Persistencia de sesiones en archivo y endurecimiento básico.
+- [ ] Panel admin para editar precios sin redeploy.
+- [ ] Soporte multilenguaje y plantillas por negocio.
+- [ ] Métricas reales (tiempo de respuesta, conversión) con dashboard.
 
-El flujo de **útiles escolares** (dentro de la demo):
+## 📄 Licencia
 
-- Al entrar a la demo responde con un saludo: `1. Realizar una cotización de útiles escolares` / `2. Comunicarme con Evelyn` / `3. Solicitar un Chatbot Inteligente para mi negocio`. El catálogo no está en el saludo: se muestra al pedirlo por palabra (ej. "catálogo", "qué tienes") o después de la opción 1 (pregunta "¿Deseas ver lo que tengo disponible?").
-- La opción 3 (o escribir "quiero un chatbot") levanta los **requerimientos de un chatbot** para el negocio del cliente: 8 preguntas (además del tipo de servicio de la primera pregunta del agente principal, que no se repite), resumen final, aprobación y la opción de corregir campo por campo. Al aprobar, se registran los requerimientos en el log y se indica que un asesor lo contactará personalmente.
-- El resto del flujo habla de forma natural (sin menús `1. Sí / 2. No`): se responde con "sí", "no", "domicilio", "retiro", el nombre de un producto, etc.
-- Con `1` o `sí`, el bot pide la lista: puede escribirla por mensaje (un producto por línea) o adjuntarla en **PDF o Excel**.
-- Con una lista, el bot busca cada ítem en `Producto`+`Descripcion` y envía una **imagen con la cotización** (precio por ítem y total) y pregunta si desea realizar el pedido.
-- También se puede preguntar por un producto directo (ej. `goma en barra`): muestra el precio y pide la cantidad; al final se arma la cotización.
-- Las **fotos no se leen** (sin OCR): se pide escribir la lista o adjuntarla en PDF/Excel.
-- Preguntas sobre `pago`/`transferencia` responden las condiciones de pago indicando el monto exacto del anticipo del 50% (mitad al confirmar, mitad al entregar o retirar). Al enviar el comprobante, el bot verifica (con Gemini vision) que el monto sea ≥ el 50%, que esté a nombre de Evelyn Lizeth Zambrano y que la fecha sea la de hoy.
-- Si el pedido se confirma, se pregunta por entrega a domicilio (con recargo) y luego la dirección y horario.
-- El chat se cierra por inactividad a los 14 minutos (aviso "¿Sigues ahí?" a los 5 min, y "El chat se cerrará por falta de respuesta." al cierre). Si la venta ya se concretó (comprobante enviado o retiro agendado) no se envían avisos.
-- El catálogo (Excel) se carga en memoria solo cuando se necesita (al entrar al flujo con la opción 1, ver el catálogo o consultar un producto); el saludo y la opción 2 no lo cargan.
+MIT. Ver `LICENSE` o usar el texto estándar MIT con `[COMPLETAR: tu nombre y año]`.
 
-## IA opcional (Gemini)
+## 📬 Contacto
 
-Si hay `GEMINI_API_KEY`, además del diálogo de servicios del **agente principal** (`askGeminiServices`), el flujo de útiles usa IA (modelo `GEMINI_MODEL`, default `gemini-3.1-flash-lite`) para el diálogo libre, el armado de listas, la revisión de disponibilidad y la verificación del comprobante con visión. Sin la clave, el bot funciona 100% con las reglas (el agente principal muestra un menú estático). El bot **nunca confía en la IA para los precios**: cada ítem se revalida contra el catálogo y las imágenes de cotización se arman con los datos reales.
+- LinkedIn: [COMPLETAR: tu-url-de-linkedin]
+- Email: [COMPLETAR: tu-email]
 
-## Archivos
+---
 
-- `server.js` — servidor Express, verificación de firmas (Meta y YCloud), routing del flujo de servicios/útiles, media (upload/descarga) y envío por YCloud o Graph API
-- `lib/excel.js` — carga del `.xlsx` (`loadWorkbook`) y `normalize()`
-- `lib/utiles.js` — catálogo de útiles, búsqueda `findItems`, parseo de listas/archivos, `buildPriceImage` (sharp) y `formatPrice`
-- `lib/store.js` — agente principal (estado `SERVICIOS`), demo de útiles y máquina de estados por sesión, caché y timers de inactividad
-- `lib/ai.js` — integración opcional con Gemini (`isAiEnabled`, `askGemini` JSON, `askGeminiServices`, `buildCatalogContext`)
-- `UtilesEscolares.xlsx` — catálogo de útiles (se cachea al arrancar; se actualiza vía push a GitHub + redeploy)
-- `test-usability.mjs` — tests de usabilidad (ejecutar con `npm test`)
+> Nota para publicar: 1) graba el GIF de 30s y súbelo a `docs/demo.gif` para que el placeholder no quede vacío; 2) reemplaza los `[COMPLETAR]` (repo, app Render, LinkedIn, email, nombre en licencia) y verifica que los badges apunten a tus versiones reales; 3) añade una captura de la imagen de cotización en `docs/` y enlázala en Demo visual, los reclutadores entienden el valor en segundos con una imagen real.

@@ -6,6 +6,7 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 
 process.env.IA_IMAGEN_REPLY_DELAY_MS = '10';
+process.env.BOT_GUARD = 'off';
 import { loadWorkbook, normalize } from './lib/excel.js';
 import { getUtilesProducts, getUtilesSheet, findItems, matchListLines, parseItemList, buildPriceImage, buildPriceSvg, buildCatalogoImage, catalogoText, formatPrice, parseFile, findProductImage } from './lib/utiles.js';
 import { createUtilesStore, mergeListaRows } from './lib/store.js';
@@ -850,9 +851,7 @@ test('útiles — pedido por retiro: comprobante, viernes y despedida', async ()
   await store.handleMessage(from, { type: 'text', text: '3' });
   await store.handleMessage(from, { type: 'text', text: 'no' });
   await store.handleMessage(from, { type: 'text', text: '1' });
-  assert.equal(store.getState(from), 'GENERO');
-  assert.ok(sent.some((m) => m.body && m.body.includes('niña')));
-  await store.handleMessage(from, { type: 'text', text: 'niña' });
+  assert.equal(store.getState(from), 'ENTREGA', 'sin lista de útiles no pregunta género');
   await store.handleMessage(from, { type: 'text', text: '2' });
   assert.equal(store.getState(from), 'ESPERA_COMPROBANTE');
   assert.ok(sent.some((m) => m.body && m.body.includes('50%')));
@@ -878,8 +877,7 @@ test('útiles — pedido con entrega a domicilio completa', async () => {
   await store.handleMessage(from, { type: 'text', text: '3' });
   await store.handleMessage(from, { type: 'text', text: 'no' });
   await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'niño' });
-  assert.equal(store.getState(from), 'ENTREGA');
+  assert.equal(store.getState(from), 'ENTREGA', 'sin lista de útiles no pregunta género');
   await store.handleMessage(from, { type: 'text', text: '1' });
   assert.equal(store.getState(from), 'UBICACION');
   await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
@@ -909,7 +907,7 @@ test('útiles — abandonar el pedido de entrega cierra la sesión', async () =>
   await store.handleMessage(from, { type: 'text', text: '3' });
   await store.handleMessage(from, { type: 'text', text: 'no' });
   await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'niña' });
+  assert.equal(store.getState(from), 'ENTREGA', 'sin lista de útiles no pregunta género');
   await store.handleMessage(from, { type: 'text', text: '1' });
   await store.handleMessage(from, { type: 'text', text: 'Av siempre viva 123' });
   await store.handleMessage(from, { type: 'text', text: 'mañana a las 3pm' });
@@ -2374,8 +2372,7 @@ test('útiles — "domicilio" en entrega pide dirección', async () => {
   await store.handleMessage(from, { type: 'text', text: '3' });
   await store.handleMessage(from, { type: 'text', text: 'no' });
   await store.handleMessage(from, { type: 'text', text: '1' });
-  await store.handleMessage(from, { type: 'text', text: 'niña' });
-  assert.equal(store.getState(from), 'ENTREGA');
+  assert.equal(store.getState(from), 'ENTREGA', 'sin lista de útiles no pregunta género');
   await store.handleMessage(from, { type: 'text', text: 'domicilio' });
   assert.equal(store.getState(from), 'UBICACION');
 });
@@ -2395,10 +2392,34 @@ test('útiles — respuesta no reconocida en confirmar cotización permite modif
   assert.ok(sent[sent.length - 1].body.includes('agregar algo más'));
 });
 
+test('útiles — pedir servicios en la demo continúa con la venta de chatbots', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990145';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra' });
+  await store.handleMessage(from, { type: 'text', text: 'quiero una página web para mi negocio' });
+  assert.equal(store.getState(from), 'CHATBOT', 'la petición de servicios en la demo abre el formulario');
+  assert.ok(sent[sent.length - 1].body.includes('tipo de servicio'));
+});
+
+test('útiles — en género, pedir un chatbot continúa con la venta de chatbots', async () => {
+  const { store, sent } = makeStore();
+  const from = '59399990146';
+  await store.handleMessage(from, { type: 'text', text: 'hola' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  await store.handleMessage(from, { type: 'text', text: 'goma en barra\nborrador' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  await store.handleMessage(from, { type: 'text', text: 'no' });
+  await store.handleMessage(from, { type: 'text', text: '1' });
+  assert.equal(store.getState(from), 'GENERO', 'con lista sí pregunta género');
+  await store.handleMessage(from, { type: 'text', text: 'quiero un chatbot para mi negocio' });
+  assert.equal(store.getState(from), 'CHATBOT', 'en género entiende la venta de chatbots');
+});
+
 after(() => {
   for (const s of stores) s.close();
   console.log('\n===== NOTAS =====');
-  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 Evelyn / 3 chatbot para tu negocio; sin opcion de catalogo en el saludo: el catalogo se pide por palabra "catalogo" o tras la opcion 1) -> ESPERA_LISTA | NUMEROS (numeros por coma -> cantidad por articulo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar) -> GENERO -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmacion -> cierre. La imagen de cotizacion usa 5 columnas (Cantidad | Descripcion solicitada | Producto | Valor unitario | Valor total) cuando proviene de una lista de utiles, y el layout Cantidad | Producto | Precio en el resto de los casos.');
+  console.log('1. Flujo de utiles escolares: SALUDO (1 IA / 2 Evelyn / 3 chatbot para tu negocio; sin opcion de catalogo en el saludo: el catalogo se pide por palabra "catalogo" o tras la opcion 1) -> ESPERA_LISTA | NUMEROS (numeros por coma -> cantidad por articulo) -> AGREGADO (agregar/eliminar/finalizar) -> CONFIRMA_COTIZACION (de acuerdo/modificar, con confirmacion del total) -> GENERO (solo lista de utiles) -> ENTREGA (domicilio o retiro) -> comprobante manual -> confirmacion -> cierre. La imagen de cotizacion usa 5 columnas (Cantidad | Descripcion solicitada | Producto | Valor unitario | Valor total) cuando proviene de una lista de utiles, y el layout Cantidad | Producto | Precio en el resto de los casos.');
   console.log('2. El Excel de útiles tiene la columna "Número de producto" (1..59); la numeración del catálogo proviene de esa columna.');
   console.log('3. Sin APP_SECRET en .env, el webhook acepta cualquier POST (la verificacion de firma esta desactivada).');
   console.log('==================');

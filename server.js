@@ -1,13 +1,18 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import express from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { loadWorkbook } from './lib/excel.js';
 import { getUtilesProducts, getUtilesSheet } from './lib/utiles.js';
 import { createUtilesStore, ESPERA_GENERANDO } from './lib/store.js';
 import { isAiEnabled } from './lib/ai.js';
 
 const app = express();
-app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf.toString('utf8'); } }));
+app.set('trust proxy', 1);
+app.use(helmet());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false }));
+app.use(express.json({ limit: '200kb', verify: (req, res, buf) => { req.rawBody = buf.toString('utf8'); } }));
 
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'cambia-este-token';
@@ -21,6 +26,57 @@ const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
 const YCLOUD_API_KEY = process.env.YCLOUD_API_KEY || '';
 const YCLOUD_PHONE = process.env.YCLOUD_PHONE || '';
 const YCLOUD_WEBHOOK_SECRET = process.env.YCLOUD_WEBHOOK_SECRET || '';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS) || 10000;
+const MAX_MEDIA_BYTES = Number(process.env.MAX_MEDIA_BYTES) || 5 * 1024 * 1024;
+
+function validateEnv() {
+  const fatal = [];
+  const warn = [];
+  if (NODE_ENV === 'production') {
+    if (!YCLOUD_API_KEY) fatal.push('YCLOUD_API_KEY');
+    if (!YCLOUD_PHONE) fatal.push('YCLOUD_PHONE');
+    if (!YCLOUD_WEBHOOK_SECRET) warn.push('YCLOUD_WEBHOOK_SECRET (firmas desactivadas)');
+    if (!process.env.APP_SECRET) warn.push('APP_SECRET (firmas Meta desactivadas)');
+    if (VERIFY_TOKEN === 'cambia-este-token') warn.push('VERIFY_TOKEN sigue con valor por defecto');
+  } else {
+    if (!YCLOUD_API_KEY) warn.push('YCLOUD_API_KEY (modo dev: solo log)');
+    if (!process.env.GEMINI_API_KEY) warn.push('GEMINI_API_KEY (flujo sin IA)');
+  }
+  if (warn.length) console.log(`[env] avisos (${NODE_ENV}): falta ${warn.join(', ')}`);
+  if (fatal.length) {
+    console.error(`[env] FATAL (${NODE_ENV}): faltan ${fatal.join(', ')}`);
+    process.exit(1);
+  }
+}
+
+async function fetchWithTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function fetchWithRetry(url, opts = {}, retries = 1) {
+  let lastErr = null;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetchWithTimeout(url, opts);
+      if ((res.status === 429 || res.status >= 500) && i < retries) {
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (i < retries) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr ?? new Error('fetch fallido');
+}
 
 let cached = { key: '', utiles: null };
 
@@ -43,6 +99,14 @@ function verifySignature(req, rawBody) {
   return crypto.timingSafeEqual(a, b);
 }
 
+const YCLOUD_MAX_AGE_MS = Number(process.env.YCLOUD_SIGNATURE_MAX_AGE_MS) || 5 * 60 * 1000;
+
+function parseYCloudTimestamp(t) {
+  const n = Number(String(t ?? '').trim());
+  if (!Number.isFinite(n)) return null;
+  return n < 1e12 ? n * 1000 : n;
+}
+
 function verifyYCloudSignature(req, rawBody) {
   if (!YCLOUD_WEBHOOK_SECRET) return true;
   const sig = req.headers['ycloud-signature'];
@@ -55,6 +119,8 @@ function verifyYCloudSignature(req, rawBody) {
   const t = parts.t;
   const s = parts.s;
   if (!t || !s) return false;
+  const ts = parseYCloudTimestamp(t);
+  if (ts == null || Math.abs(Date.now() - ts) > YCLOUD_MAX_AGE_MS) return false;
   const expected = crypto.createHmac('sha256', YCLOUD_WEBHOOK_SECRET).update(`${t}.${rawBody}`).digest('hex');
   const a = Buffer.from(s);
   const b = Buffer.from(expected);
@@ -69,23 +135,27 @@ async function sendWhatsApp(to, body, businessFrom) {
       console.log('[enviar] falta configurar YCLOUD_PHONE. Mensaje:', body);
       return;
     }
-    const res = await fetch('https://api.ycloud.com/v2/whatsapp/messages', {
-      method: 'POST',
-      headers: {
-        'X-API-Key': YCLOUD_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from,
-        to: `+${to}`,
-        type: 'text',
-        text: { body },
-      }),
-    });
-    if (res.ok) {
-      console.log('[enviar] mensaje enviado via YCloud a', to);
-    } else {
-      console.log('[enviar] error', res.status, await res.text());
+    try {
+      const res = await fetchWithRetry('https://api.ycloud.com/v2/whatsapp/messages', {
+        method: 'POST',
+        headers: {
+          'X-API-Key': YCLOUD_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from,
+          to: `+${to}`,
+          type: 'text',
+          text: { body },
+        }),
+      });
+      if (res.ok) {
+        console.log('[enviar] mensaje enviado via YCloud a', to);
+      } else {
+        console.log('[enviar] error', res.status, await res.text());
+      }
+    } catch (err) {
+      console.error('[enviar] error de red/timeout', err?.name || err);
     }
     return;
   }
@@ -94,26 +164,30 @@ async function sendWhatsApp(to, body, businessFrom) {
     return;
   }
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/messages`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${ACCESS_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type: 'text',
-      text: { body },
-    }),
-  });
-  if (!res.ok) console.log('[enviar] error', res.status, await res.text());
+  try {
+    const res = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ACCESS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'text',
+        text: { body },
+      }),
+    });
+    if (!res.ok) console.log('[enviar] error', res.status, await res.text());
+  } catch (err) {
+    console.error('[enviar] error de red/timeout', err?.name || err);
+  }
 }
 
 async function uploadYCloudMedia(from, buffer, filename) {
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: 'image/png' }), filename);
-  const res = await fetch(`https://api.ycloud.com/v2/whatsapp/media/${encodeURIComponent(from)}/upload`, {
+  const res = await fetchWithRetry(`https://api.ycloud.com/v2/whatsapp/media/${encodeURIComponent(from)}/upload`, {
     method: 'POST',
     headers: { 'X-API-Key': YCLOUD_API_KEY },
     body: form,
@@ -132,7 +206,7 @@ async function sendWhatsAppImage(to, buffer, businessFrom) {
     }
     try {
       const id = await uploadYCloudMedia(from, buffer, 'cotizacion.png');
-      const res = await fetch('https://api.ycloud.com/v2/whatsapp/messages', {
+      const res = await fetchWithRetry('https://api.ycloud.com/v2/whatsapp/messages', {
         method: 'POST',
         headers: {
           'X-API-Key': YCLOUD_API_KEY,
@@ -143,7 +217,7 @@ async function sendWhatsAppImage(to, buffer, businessFrom) {
       if (res.ok) console.log('[enviar] imagen enviada via YCloud a', to);
       else console.log('[enviar] error imagen', res.status, await res.text());
     } catch (err) {
-      console.error('[enviar] error al enviar imagen via YCloud', err);
+      console.error('[enviar] error al enviar imagen via YCloud', err?.name || err);
     }
     return;
   }
@@ -151,29 +225,46 @@ async function sendWhatsAppImage(to, buffer, businessFrom) {
     console.log('[enviar] modo dev, imagen no enviada (', buffer.length, 'bytes )');
     return;
   }
-  const form = new FormData();
-  form.append('messaging_product', 'whatsapp');
-  form.append('type', 'image/png');
-  form.append('file', new Blob([buffer], { type: 'image/png' }));
-  const up = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/media`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
-    body: form,
-  });
-  if (!up.ok) {
-    console.log('[enviar] error upload imagen', up.status, await up.text());
-    return;
+  try {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', 'image/png');
+    form.append('file', new Blob([buffer], { type: 'image/png' }));
+    const up = await fetchWithRetry(`https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+      body: form,
+    });
+    if (!up.ok) {
+      console.log('[enviar] error upload imagen', up.status, await up.text());
+      return;
+    }
+    const upData = await up.json();
+    const res = await fetchWithRetry(`https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ACCESS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'image', image: { id: upData.id } }),
+    });
+    if (!res.ok) console.log('[enviar] error imagen', res.status, await res.text());
+  } catch (err) {
+    console.error('[enviar] error de red/timeout imagen', err?.name || err);
   }
-  const upData = await up.json();
-  const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/messages`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${ACCESS_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'image', image: { id: upData.id } }),
-  });
-  if (!res.ok) console.log('[enviar] error imagen', res.status, await res.text());
+}
+
+function checkMediaSize(res) {
+  const len = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(len) && len > MAX_MEDIA_BYTES) {
+    throw new Error(`media demasiado grande (${len} bytes, max ${MAX_MEDIA_BYTES})`);
+  }
+}
+
+async function bufferWithCap(res) {
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > MAX_MEDIA_BYTES) throw new Error(`media demasiado grande (${buf.length} bytes)`);
+  return buf;
 }
 
 async function downloadMedia(msg) {
@@ -181,23 +272,25 @@ async function downloadMedia(msg) {
   if (!link) return null;
   if (/^https?:\/\//i.test(link)) {
     const headers = YCLOUD_API_KEY ? { 'X-API-Key': YCLOUD_API_KEY } : {};
-    let res = await fetch(link, { headers });
+    let res = await fetchWithTimeout(link, { headers });
     if (!res.ok && YCLOUD_API_KEY) {
-      res = await fetch(link);
+      res = await fetchWithTimeout(link);
     }
     if (!res.ok) throw new Error(`descarga media: ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    checkMediaSize(res);
+    return bufferWithCap(res);
   }
   if (!ACCESS_TOKEN) throw new Error('sin ACCESS_TOKEN para descargar media');
-  const infoRes = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${link}?phone_number_id=${PHONE_NUMBER_ID}`, {
+  const infoRes = await fetchWithTimeout(`https://graph.facebook.com/${GRAPH_VERSION}/${link}?phone_number_id=${PHONE_NUMBER_ID}`, {
     headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
   });
   if (!infoRes.ok) throw new Error(`info media: ${infoRes.status}`);
   const info = await infoRes.json();
   if (!info.url) throw new Error('media id sin url');
-  const res = await fetch(info.url, { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } });
+  const res = await fetchWithTimeout(info.url, { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } });
   if (!res.ok) throw new Error(`descarga media: ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+  checkMediaSize(res);
+  return bufferWithCap(res);
 }
 
 async function normalizeInbound(msg) {
@@ -232,11 +325,36 @@ const utilesStore = createUtilesStore({
 });
 
 const pendingByFrom = new Map();
+const senderMinute = new Map();
+const SENDER_PER_MIN = Number(process.env.SENDER_PER_MIN) || 15;
+
+function allowSender(from) {
+  const now = Date.now();
+  const cur = senderMinute.get(from);
+  if (!cur || now - cur.start > 60 * 1000) {
+    senderMinute.set(from, { start: now, count: 1 });
+    return true;
+  }
+  cur.count += 1;
+  if (cur.count > SENDER_PER_MIN) return false;
+  return true;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of senderMinute) {
+    if (now - v.start > 2 * 60 * 1000) senderMinute.delete(k);
+  }
+}, 60 * 1000).unref?.();
 
 function runSerialized(from, fn) {
   const prev = pendingByFrom.get(from) || Promise.resolve();
   const next = prev.then(fn, fn);
-  pendingByFrom.set(from, next.catch(() => {}));
+  const guarded = next.catch(() => {});
+  pendingByFrom.set(from, guarded);
+  guarded.finally(() => {
+    if (pendingByFrom.get(from) === guarded) pendingByFrom.delete(from);
+  });
   return next;
 }
 
@@ -252,53 +370,64 @@ app.get('/webhook', (req, res) => {
 });
 
 function toMessages(event) {
-  if (event?.type === 'whatsapp.inbound_message.received' && event?.whatsappInboundMessage) {
-    const m = event.whatsappInboundMessage;
-    const out = { from: m.from, businessFrom: m.to, type: m.type, text: m.text };
-    const media = m.image || m.document;
-    if (media) {
-      out.link = media.link;
-      out.mimeType = media.mime_type;
-      out.mediaId = media.id;
-      out.filename = media.filename;
-    }
-    return [out];
-  }
-  const changes = event?.entry?.[0]?.changes ?? [];
-  const messages = [];
-  for (const change of changes) {
-    const value = change.value ?? {};
-    const businessFrom = value.metadata?.phone_number_id;
-    for (const m of value.messages ?? []) {
-      const out = { from: m.from, businessFrom, type: m.type, text: m.text };
+  try {
+    if (!event || typeof event !== 'object') return [];
+    if (event?.type === 'whatsapp.inbound_message.received' && event?.whatsappInboundMessage) {
+      const m = event.whatsappInboundMessage;
+      if (!m || typeof m !== 'object') return [];
+      const out = { from: m.from, businessFrom: m.to, type: m.type, text: m.text };
       const media = m.image || m.document;
       if (media) {
-        out.link = media.id;
+        out.link = media.link;
         out.mimeType = media.mime_type;
         out.mediaId = media.id;
         out.filename = media.filename;
       }
-      messages.push(out);
+      return [out];
     }
+    const changes = event?.entry?.[0]?.changes ?? [];
+    if (!Array.isArray(changes)) return [];
+    const messages = [];
+    for (const change of changes) {
+      const value = change?.value ?? {};
+      const businessFrom = value.metadata?.phone_number_id;
+      const valueMessages = Array.isArray(value.messages) ? value.messages : [];
+      for (const m of valueMessages) {
+        if (!m || typeof m !== 'object') continue;
+        const out = { from: m.from, businessFrom, type: m.type, text: m.text };
+        const media = m.image || m.document;
+        if (media) {
+          out.link = media.id;
+          out.mimeType = media.mime_type;
+          out.mediaId = media.id;
+          out.filename = media.filename;
+        }
+        messages.push(out);
+      }
+    }
+    return messages;
+  } catch {
+    return [];
   }
-  return messages;
 }
 
 app.post('/webhook', async (req, res) => {
   const raw = req.rawBody ?? JSON.stringify(req.body);
-  const parts = {};
-  const h = req.headers['ycloud-signature'];
-  if (h) for (const piece of String(h).split(',')) {
-    const idx = piece.indexOf('=');
-    if (idx > 0) parts[piece.slice(0, idx).trim()] = piece.slice(idx + 1).trim();
-  }
-  const expected = parts.t ? crypto.createHmac('sha256', YCLOUD_WEBHOOK_SECRET).update(`${parts.t}.${raw}`).digest('hex') : '';
-  console.log('[debug] t=', parts.t, 's_recibida=', parts.s, 's_esperada=', expected, 'secret_len=', YCLOUD_WEBHOOK_SECRET.length);
   if (!verifySignature(req, raw) || !verifyYCloudSignature(req, raw)) return res.sendStatus(401);
   res.sendStatus(200);
 
-  for (const msg of toMessages(req.body)) {
+  let inbound = [];
+  try {
+    inbound = toMessages(req.body);
+  } catch {
+    inbound = [];
+  }
+  for (const msg of inbound) {
     if (!msg.from) continue;
+    if (!allowSender(msg.from)) {
+      console.log('[flood] remitente limitado por minuto:', msg.from);
+      continue;
+    }
     runSerialized(msg.from, async () => {
       try {
         const text = msg.text?.body ?? '';
@@ -320,6 +449,27 @@ app.get('/', (req, res) => {
   res.send('Agente de venta de desarrollo digital (agentes de WhatsApp, apps web, páginas web) con demo de venta de útiles escolares activo');
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor escuchando en el puerto ${PORT}`);
+app.get('/health', (req, res) => {
+  res.json({ ok: true, uptime: process.uptime(), env: NODE_ENV });
 });
+
+validateEnv();
+
+const server = app.listen(PORT, () => {
+  console.log(`Servidor escuchando en el puerto ${PORT} (${NODE_ENV})`);
+});
+
+function shutdown(signal) {
+  console.log(`[server] ${signal}, cerrando...`);
+  server.close(() => {
+    try {
+      utilesStore.close();
+    } catch {}
+    pendingByFrom.clear();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
