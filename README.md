@@ -1,22 +1,11 @@
-# Bot WhatsApp para consulta de equipos y útiles escolares
+# Chatbot IA para Ventas por WhatsApp Business
 
 Bot con dos flujos en WhatsApp:
 
-1. **Consulta de equipos** (laptops arrendadas/disponibles) leyendo `Laptops.xlsx`. Solo usuarios cuyos números estén en la hoja `Autorizacion` pueden activarlo (escribiendo `hola bot`).
+1. **venta de chat bots** 
 2. **Venta de útiles escolares** (público, sin autorización) leyendo `UtilesEscolares.xlsx`: cotiza listas de útiles, muestra precios con imagen y registra pedidos.
 
 **Producción**: desplegado en Render en `https://pc-venta-ia.onrender.com`, con YCloud como proveedor (BSP) para recibir/enviar mensajes. El endpoint del webhook es permanente y **no cambia**: `https://pc-venta-ia.onrender.com/webhook`.
-
-## Estructura del Excel
-
-| Hoja | Contenido |
-|---|---|
-| `Laptos` | Datos con fila de encabezado en la **fila 4** (desde la fila 5), columnas en este orden: Código, Empresa, Usuario, Marca y modelo, Características, N° Serial, Celular, Correo, Estado |
-| `Autorizacion` | Fila 1 encabezado `Nombre`, `Celular`; desde fila 2 los números permitidos |
-
-- El número de celular se compara por sus últimos 9 dígitos, así que sirve tanto `593987695938` como `0987695938`.
-- Para que una persona pueda consultar equipos, su número debe estar en `Autorizacion` y escribir `hola bot`.
-- `Laptops.xlsx` contiene datos personales (Celular/Correo) → el repositorio de GitHub debe ser **privado**.
 
 ### Estructura de `UtilesEscolares.xlsx`
 
@@ -52,7 +41,7 @@ Bot con dos flujos en WhatsApp:
 
 ### Mantener el plan free despierto
 
-Render free duerme tras ~15 min de inactividad. Configurar un monitor gratuito en **UptimeRobot** con GET a `https://<nombre>.onrender.com/` cada 5 minutos. Para garantía total, usar el plan de $7/mes.
+Render free duerme tras ~15 min de inactividad. Configurar un monitor gratuito en **UptimeRobot** con GET a `https://<nombre>.onrender.com/` cada 5 minutos. 
 
 ## Cómo se actualizan los datos del Excel
 
